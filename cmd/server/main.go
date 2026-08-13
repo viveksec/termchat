@@ -210,7 +210,7 @@ func (s *relayServer) routePacket(sender *client, raw []byte) {
 	case protocol.MsgConnectResponse:
 		s.handleConnectResponse(sender, pkt)
 
-	case protocol.MsgKeyExchange, protocol.MsgChat, protocol.MsgDisconnect:
+	case protocol.MsgKeyExchange, protocol.MsgChat, protocol.MsgFileChunk, protocol.MsgDisconnect:
 		// These packets are forwarded verbatim to the target.
 		// The relay never inspects their payloads.
 		s.forwardToTarget(sender, pkt)

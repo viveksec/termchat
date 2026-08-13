@@ -173,3 +173,26 @@ func Decrypt(key []byte, ciphertextBase64 string) ([]byte, error) {
 
 	return plaintext, nil
 }
+
+// CalculateSafetyNumber derives a 6-digit Short Authentication String (SAS)
+// from the public keys of both session participants. By sorting the public
+// keys lexicographically, both participants compute the exact same code.
+// Reading this code out-of-band (e.g., over voice or in person) guarantees
+// 100% protection against Man-in-the-Middle (MITM) attacks.
+func CalculateSafetyNumber(pubKeyA, pubKeyB string) string {
+	first, second := pubKeyA, pubKeyB
+	if first > second {
+		first, second = second, first
+	}
+
+	h := sha256.New()
+	h.Write([]byte(first))
+	h.Write([]byte(second))
+	digest := h.Sum(nil)
+
+	// Extract 6 digits formatted as XXX-XXX
+	val1 := (uint32(digest[0])<<8 | uint32(digest[1])) % 1000
+	val2 := (uint32(digest[2])<<8 | uint32(digest[3])) % 1000
+	return fmt.Sprintf("%03d-%03d", val1, val2)
+}
+

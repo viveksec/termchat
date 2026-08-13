@@ -40,6 +40,9 @@ const (
 	// server forwards it verbatim without ever inspecting it.
 	MsgChat MessageType = "CHAT"
 
+	// MsgFileChunk carries an end-to-end encrypted file chunk payload.
+	MsgFileChunk MessageType = "FILE_CHUNK"
+
 	// MsgDisconnect is sent by a client to notify its peer that the session
 	// has ended, or by the server to notify a client that its peer disconnected.
 	MsgDisconnect MessageType = "DISCONNECT"
@@ -179,6 +182,14 @@ type KeyExchangePayload struct {
 type ChatPayload struct {
 	// Ciphertext is the AES-256-GCM encrypted message body as base64.
 	// Format: base64(nonce || ciphertext || tag)
+	Ciphertext string `json:"ciphertext"`
+}
+
+// FileChunkPayload is the payload for MsgFileChunk packets.
+type FileChunkPayload struct {
+	Filename   string `json:"filename"`
+	ChunkIndex int    `json:"chunk_index"`
+	TotalChunks int   `json:"total_chunks"`
 	Ciphertext string `json:"ciphertext"`
 }
 

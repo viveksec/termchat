@@ -17,6 +17,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -328,6 +329,29 @@ func (wc *wsClient) handleIncomingPacket(pkt *protocol.Packet) {
 			ts:     pkt.Timestamp,
 		})
 
+	case protocol.MsgFileChunk:
+		var payload protocol.FileChunkPayload
+		if err := pkt.DecodePayload(&payload); err != nil {
+			log.Printf("[client] invalid FILE_CHUNK payload: %v", err)
+			return
+		}
+		secret := wc.sc.getSharedSecret()
+		if secret == nil {
+			return
+		}
+		chunkBytes, err := crypto.Decrypt(secret, payload.Ciphertext)
+		if err != nil {
+			log.Printf("[client] file chunk decryption failed: %v", err)
+			return
+		}
+		wc.program.Send(wsFileChunkMsg{
+			fromID:      pkt.SenderID,
+			filename:    payload.Filename,
+			chunkIndex:  payload.ChunkIndex,
+			totalChunks: payload.TotalChunks,
+			data:        chunkBytes,
+		})
+
 	case protocol.MsgDisconnect:
 		var payload protocol.DisconnectPayload
 		if err := pkt.DecodePayload(&payload); err == nil {
@@ -508,7 +532,8 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return wp.inner, cmd
 		}
 		wp.sc.setSharedSecret(secret)
-		log.Println("[client] shared secret derived successfully")
+		safetyNum := crypto.CalculateSafetyNumber(wp.sc.keyPair.PublicKeyBase64(), m.publicKey)
+		log.Printf("[client] shared secret derived successfully. Safety Code: %s", safetyNum)
 
 		// Retrieve peerID from model state.
 		innerModel, ok := wp.inner.(model)
@@ -518,8 +543,10 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Transition TUI to chat state.
 		newInner, cmd := wp.inner.Update(sharedSecretDerivedMsg{
-			peerID:       innerModel.peerID,
-			sharedSecret: secret,
+			peerID:        innerModel.peerID,
+			sharedSecret:  secret,
+			safetyNumber:  safetyNum,
+			peerPublicKey: m.publicKey,
 		})
 		wp.inner = newInner
 		return wp.inner, cmd
@@ -532,8 +559,9 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		innerModel.state = stateChat
 		innerModel.peerID = m.peerID
+		innerModel.safetyNumber = m.safetyNumber
 		innerModel.appendSystem(
-			fmt.Sprintf("🔒 Secure session established with %s (AES-256-GCM).", m.peerID))
+			fmt.Sprintf("🔒 Secure session established with %s (AES-256-GCM · Safety Code: %s).", m.peerID, m.safetyNumber))
 		innerModel = innerModel.syncViewport()
 		wp.inner = innerModel
 		return wp.inner, nil
@@ -576,6 +604,56 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		wp.sc.clearSharedSecret()
+		return wp.inner, nil
+
+	// ── Outgoing encrypted file transfer ───────────────────
+	case sendFileMsg:
+		secret := wp.sc.getSharedSecret()
+		if secret == nil {
+			log.Println("[client] cannot send file: no shared secret")
+			return wp.inner, nil
+		}
+		targetPeerID := m.peerID
+		targetFilePath := m.filePath
+		go func() {
+			data, err := os.ReadFile(targetFilePath)
+			if err != nil {
+				log.Printf("[client] failed to read file %s: %v", targetFilePath, err)
+				return
+			}
+			chunkSize := 32 * 1024 // 32 KiB chunks
+			totalChunks := (len(data) + chunkSize - 1) / chunkSize
+			filename := filepath.Base(targetFilePath)
+
+			for i := 0; i < totalChunks; i++ {
+				start := i * chunkSize
+				end := start + chunkSize
+				if end > len(data) {
+					end = len(data)
+				}
+				ciphertext, err := crypto.Encrypt(secret, data[start:end])
+				if err != nil {
+					log.Printf("[client] chunk %d encryption failed: %v", i, err)
+					continue
+				}
+				payload := protocol.FileChunkPayload{
+					Filename:    filename,
+					ChunkIndex:  i,
+					TotalChunks: totalChunks,
+					Ciphertext:  ciphertext,
+				}
+				pkt, err := protocol.NewPacket(protocol.MsgFileChunk, targetPeerID, payload)
+				if err != nil {
+					continue
+				}
+				raw, err := pkt.Encode()
+				if err != nil {
+					continue
+				}
+				wp.wc.sendCh <- outgoingMsg{data: raw}
+				time.Sleep(5 * time.Millisecond) // smooth flow control
+			}
+		}()
 		return wp.inner, nil
 	}
 

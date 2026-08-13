@@ -107,3 +107,22 @@ func TestInvalidKeySize(t *testing.T) {
 		t.Error("expected error for non-32-byte key in Decrypt")
 	}
 }
+
+func TestSafetyNumber(t *testing.T) {
+	pubA := "keyA_base64_string_sample_123456"
+	pubB := "keyB_base64_string_sample_654321"
+
+	code1 := crypto.CalculateSafetyNumber(pubA, pubB)
+	code2 := crypto.CalculateSafetyNumber(pubB, pubA)
+
+	if code1 == "" {
+		t.Error("safety number should not be empty")
+	}
+	if code1 != code2 {
+		t.Errorf("safety number must be symmetric regardless of argument order: %s != %s", code1, code2)
+	}
+	if len(code1) != 7 { // XXX-XXX format is 7 chars
+		t.Errorf("expected XXX-XXX format (7 chars), got %q (%d chars)", code1, len(code1))
+	}
+}
+

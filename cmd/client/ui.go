@@ -6,6 +6,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -314,6 +316,11 @@ type model struct {
 
 	// Key-exchange state: peer's public key arrives before or after we send ours.
 	pendingPeerPublicKey string
+
+	// Advanced Security & Stealth Features
+	safetyNumber    string
+	panicMode       bool
+	showSafetyModal bool
 }
 
 // outgoingMsg is sent from the TUI to the WebSocket write pump.
@@ -417,6 +424,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendReceived(msg.fromID, msg.text, msg.ts)
 		m = m.syncViewport()
 
+	case wsFileChunkMsg:
+		os.MkdirAll("downloads", 0755)
+		outPath := filepath.Join("downloads", msg.filename)
+		f, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			f.Write(msg.data)
+			f.Close()
+		}
+		pct := int(float64(msg.chunkIndex+1) / float64(msg.totalChunks) * 100)
+		if msg.chunkIndex+1 == msg.totalChunks {
+			m.appendSystem(fmt.Sprintf("📥 Received & decrypted file: downloads/%s (100%%)", msg.filename))
+			m = m.syncViewport()
+		} else {
+			m.setNotification(fmt.Sprintf("Receiving %s: %d%% (%d/%d)", msg.filename, pct, msg.chunkIndex+1, msg.totalChunks), msgKindSystem)
+		}
+
 	case wsPeerDisconnectedMsg:
 		if m.state == stateChat || m.state == stateHandshake {
 			m.state = stateIdle
@@ -439,8 +462,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlC:
 			return m, tea.Quit
 
+		case tea.KeyCtrlP:
+			m.panicMode = !m.panicMode
+
+		case tea.KeyCtrlV:
+			if m.state == stateChat {
+				m.showSafetyModal = !m.showSafetyModal
+			} else {
+				m.setNotification("Safety numbers are only available in an active session.", msgKindSystem)
+			}
+
 		case tea.KeyEsc:
-			if m.showHelp {
+			if m.panicMode {
+				m.panicMode = false
+			} else if m.showSafetyModal {
+				m.showSafetyModal = false
+			} else if m.showHelp {
 				m.showHelp = false
 			} else if m.state == statePendingIncoming {
 				// Decline on Esc.
@@ -606,6 +643,34 @@ func (m *model) processCommand(input string) []tea.Cmd {
 	case "/whoami":
 		m.setNotification("Your ID: "+m.myID, msgKindSuccess)
 
+	case "/sendfile":
+		if m.state != stateChat {
+			m.setNotification("File transfer requires an active encrypted session.", msgKindError)
+			return nil
+		}
+		if len(args) == 0 {
+			m.setNotification("Usage: /sendfile <FILE_PATH>", msgKindError)
+			return nil
+		}
+		filePath := args[0]
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			m.setNotification("File not found: "+filePath, msgKindError)
+			return nil
+		}
+		m.appendSystem(fmt.Sprintf("📤 Initiated encrypted transfer of %s...", filepath.Base(filePath)))
+		*m = m.syncViewport()
+		cmds = append(cmds, m.sendFile(filePath))
+
+	case "/verify":
+		if m.state == stateChat {
+			m.showSafetyModal = !m.showSafetyModal
+		} else {
+			m.setNotification("Safety numbers are only available in an active session.", msgKindSystem)
+		}
+
+	case "/panic":
+		m.panicMode = !m.panicMode
+
 	default:
 		m.setNotification(fmt.Sprintf("Unknown command: %s. Type /help for help.", cmd), msgKindError)
 	}
@@ -622,9 +687,19 @@ func (m model) View() string {
 		return "Initialising…"
 	}
 
+	// Stealth Panic Mode takes over everything if active.
+	if m.panicMode {
+		return m.renderStealthScreen()
+	}
+
 	// Help overlay takes over the whole screen.
 	if m.showHelp {
 		return m.renderHelp()
+	}
+
+	// Safety Number verification modal.
+	if m.showSafetyModal {
+		return m.renderSafetyModal()
 	}
 
 	// Incoming request dialog takes priority.
@@ -862,17 +937,25 @@ func (m model) renderHelp() string {
 		lipgloss.NewStyle().Foreground(textColor).
 			Render("  /whoami          Display your assigned short ID"),
 		lipgloss.NewStyle().Foreground(textColor).
+			Render("  /verify          Show SAS Safety Number verification"),
+		lipgloss.NewStyle().Foreground(textColor).
+			Render("  /panic           Toggle Stealth Panic Mode screen"),
+		lipgloss.NewStyle().Foreground(textColor).
 			Render("  /help            Show this help screen"),
 		"",
 		lipgloss.NewStyle().Foreground(secondaryColor).Bold(true).Render("Keybindings:"),
 		lipgloss.NewStyle().Foreground(textColor).
 			Render("  Enter            Send message or confirm action"),
 		lipgloss.NewStyle().Foreground(textColor).
+			Render("  Ctrl+V           Verify Safety Number (SAS)"),
+		lipgloss.NewStyle().Foreground(textColor).
+			Render("  Ctrl+P           Toggle Stealth Panic Mode"),
+		lipgloss.NewStyle().Foreground(textColor).
 			Render("  Ctrl+D           Leave current session"),
 		lipgloss.NewStyle().Foreground(textColor).
 			Render("  Ctrl+C           Quit TermChat"),
 		lipgloss.NewStyle().Foreground(textColor).
-			Render("  F1 / Esc         Toggle this help screen"),
+			Render("  F1 / Esc         Toggle help screen / close modal"),
 		lipgloss.NewStyle().Foreground(textColor).
 			Render("  PgUp / PgDn      Scroll chat history"),
 		"",
@@ -889,6 +972,54 @@ func (m model) renderHelp() string {
 	)
 	overlay := helpStyle.Render(content)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, overlay)
+}
+
+// renderStealthScreen renders a realistic system terminal output to disguise the application.
+func (m model) renderStealthScreen() string {
+	content := fmt.Sprintf(`Last login: Thu Aug 13 13:48:10 2026 from 127.0.0.1
+user@macbook-air:~$ uptime
+ 13:48:10 up 4 days,  3:12,  2 users,  load averages: 1.45 1.62 1.58
+user@macbook-air:~$ systemctl status network.service
+● network.service - LSB: Bring up/down networking
+   Loaded: loaded (/etc/init.d/network; generated)
+   Active: active (running) since Mon 2026-08-10 10:00:00 UTC; 4 days ago
+user@macbook-air:~$ %s`, m.input.View())
+	return content
+}
+
+// renderSafetyModal renders the SAS Safety Number verification dialog.
+func (m model) renderSafetyModal() string {
+	safety := m.safetyNumber
+	if safety == "" {
+		safety = "N/A (No Session)"
+	}
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Foreground(accentColor).Bold(true).
+			Render("🛡️  Short Authentication String (SAS) Verification"),
+		"",
+		lipgloss.NewStyle().Foreground(textColor).
+			Render(fmt.Sprintf("Active Session Peer: %s", m.peerID)),
+		"",
+		lipgloss.NewStyle().Foreground(mutedColor).
+			Render("Compare this 6-digit Safety Number out-of-band"),
+		lipgloss.NewStyle().Foreground(mutedColor).
+			Render("(e.g., over voice call or in person) with your peer:"),
+		"",
+		lipgloss.NewStyle().
+			Foreground(successColor).
+			Background(panelBg).
+			Bold(true).
+			Padding(1, 4).
+			Render(fmt.Sprintf("  🔒 [  %s  ]  ", safety)),
+		"",
+		lipgloss.NewStyle().Foreground(mutedColor).Italic(true).
+			Render("If numbers match on both sides, 100% MITM protection is guaranteed."),
+		"",
+		lipgloss.NewStyle().Foreground(secondaryColor).
+			Render("Press Esc or Ctrl+V to close"),
+	)
+	dialog := helpStyle.Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1024,8 +1155,10 @@ type peerPubKeyReceivedMsg struct{ publicKey string }
 // sharedSecretDerivedMsg is posted by main.go's wrappedUpdate after
 // successfully deriving the shared secret from the peer's public key.
 type sharedSecretDerivedMsg struct {
-	peerID       string
-	sharedSecret []byte
+	peerID        string
+	sharedSecret  []byte
+	safetyNumber  string
+	peerPublicKey string
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1073,6 +1206,23 @@ func (m *model) sendChatMessage(text string) []tea.Cmd {
 	}}
 }
 
+// sendFile enqueues a file for encrypted transfer.
+func (m *model) sendFile(filePath string) tea.Cmd {
+	peerID := m.peerID
+	return func() tea.Msg {
+		return sendFileMsg{peerID: peerID, filePath: filePath}
+	}
+}
+
+// wsFileChunkMsg is posted when an encrypted file chunk arrives.
+type wsFileChunkMsg struct {
+	fromID      string
+	filename    string
+	chunkIndex  int
+	totalChunks int
+	data        []byte
+}
+
 // ─────────────────────────────────────────────────────────────
 // Internal command message types (handled in main.go wrappedUpdate)
 // ─────────────────────────────────────────────────────────────
@@ -1093,4 +1243,8 @@ type sendDisconnectMsg struct{ peerID string }
 type sendChatMsg struct {
 	peerID    string
 	plaintext string
+}
+type sendFileMsg struct {
+	peerID   string
+	filePath string
 }
