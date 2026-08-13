@@ -391,11 +391,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case wsConnectRequestMsg:
 		if m.state == stateIdle {
-			cmds = append(cmds, m.sendConnectResponse(msg.fromID, true, ""))
-			m.state = stateHandshake
-			m.peerID = msg.fromID
-			m.appendSystem(fmt.Sprintf("⚡ Incoming connection from %s. Auto-connecting...", msg.fromID))
-			cmds = append(cmds, m.sendKeyExchange())
+			m.state = statePendingIncoming
+			m.incomingFrom = msg.fromID
+			m.incomingMessage = msg.message
+			m.appendSystem(fmt.Sprintf("⚡ Incoming connection request from %s! Press Y to accept or N to decline.", msg.fromID))
+			m.input.SetValue("")
 			m = m.syncViewport()
 		} else {
 			// Already in a session — auto-reject.
