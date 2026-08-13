@@ -77,9 +77,20 @@ func (sc *sessionCrypto) clearSharedSecret() {
 // WebSocket client
 // ─────────────────────────────────────────────────────────────
 
+// defaultServers is the list of public global production relay endpoints.
+// If the user does not specify a custom -server URL, the client automatically
+// attempts these nodes in order before falling back to local host.
+var defaultServers = []string{
+	"wss://termchat-relay.onrender.com/ws",
+	"wss://termchat-relay.fly.dev/ws",
+	"ws://localhost:8080/ws",
+}
+
 // wsClient manages the WebSocket connection to the relay server.
 type wsClient struct {
 	serverURL  string
+	serverList []string
+	customURL  bool
 	conn       *websocket.Conn
 	connMu     sync.RWMutex
 	program    *tea.Program
@@ -89,30 +100,47 @@ type wsClient struct {
 	reconnect  bool
 }
 
-// newWSClient creates a wsClient without connecting.
-func newWSClient(serverURL string, sc *sessionCrypto) *wsClient {
+// newWSClient creates a wsClient with multi-server fallback support.
+func newWSClient(serverURL string, customURL bool, sc *sessionCrypto) *wsClient {
+	list := []string{serverURL}
+	if !customURL {
+		list = append(list, defaultServers...)
+	}
 	return &wsClient{
-		serverURL: serverURL,
-		sendCh:    make(chan outgoingMsg, 256),
-		sc:        sc,
-		done:      make(chan struct{}),
-		reconnect: true,
+		serverURL:  serverURL,
+		serverList: list,
+		customURL:  customURL,
+		sendCh:     make(chan outgoingMsg, 256),
+		sc:         sc,
+		done:       make(chan struct{}),
+		reconnect:  true,
 	}
 }
 
-// connect dials the relay server and blocks until the connection succeeds or
-// the done channel is closed. Returns an error if the connection cannot be
-// established and reconnect is disabled.
+// connect dials the relay server endpoints in sequence.
 func (wc *wsClient) connect() error {
 	dialer := websocket.DefaultDialer
-	conn, _, err := dialer.Dial(wc.serverURL, nil)
-	if err != nil {
-		return err
+	dialer.HandshakeTimeout = 6 * time.Second
+
+	var lastErr error
+	for _, url := range wc.serverList {
+		select {
+		case <-wc.done:
+			return fmt.Errorf("client closed")
+		default:
+		}
+
+		conn, _, err := dialer.Dial(url, nil)
+		if err == nil {
+			wc.connMu.Lock()
+			wc.conn = conn
+			wc.serverURL = url
+			wc.connMu.Unlock()
+			return nil
+		}
+		lastErr = err
 	}
-	wc.connMu.Lock()
-	wc.conn = conn
-	wc.connMu.Unlock()
-	return nil
+	return lastErr
 }
 
 // writeRaw sends a raw byte slice to the relay server. It is goroutine-safe.
@@ -586,14 +614,21 @@ func main() {
 		log.SetOutput(io.Discard)
 	}
 
-	log.Printf("[client] starting TermChat client, connecting to %s", *serverURL)
+	customURL := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "server" {
+			customURL = true
+		}
+	})
+
+	log.Printf("[client] starting TermChat client, connecting to %s (custom: %t)", *serverURL, customURL)
 
 	// Generate ephemeral key pair for this session.
 	sc := newSessionCrypto()
 	log.Printf("[client] generated X25519 public key: %s", sc.keyPair.PublicKeyBase64())
 
 	// Create the WebSocket client.
-	wc := newWSClient(*serverURL, sc)
+	wc := newWSClient(*serverURL, customURL, sc)
 
 	// Create the initial Bubbletea model, wired to the WebSocket send channel.
 	innerModel := initialModel(wc.sendCh)
