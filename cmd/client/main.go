@@ -671,7 +671,7 @@ func (wp *wrappedProgram) View() string {
 // ─────────────────────────────────────────────────────────────
 
 func main() {
-	serverURL := flag.String("server", "ws://localhost:8080/ws",
+	serverURL := flag.String("server", "wss://termchat-qdjd.onrender.com/ws",
 		"WebSocket URL of the TermChat relay server")
 	logFile := flag.String("log", "",
 		"Path to write debug logs (default: stderr)")
