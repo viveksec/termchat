@@ -45,14 +45,24 @@ go run github.com/viveksec/termchat/cmd/client@latest
       The central relay server routes raw JSON packets using anonymous 6-character short IDs. It never possesses private keys, shared secrets, or unencrypted message payloads.
     </td>
     <td width="50%">
-      <h3>🔑 Perfect Forward Secrecy</h3>
+      <h3>🔑 Ephemeral Perfect Forward Secrecy</h3>
       Every chat session negotiates an ephemeral <b>X25519 Curve25519</b> Diffie-Hellman key pair. Even if past keys were compromised, prior session plaintexts remain mathematically unrecoverable.
     </td>
   </tr>
   <tr>
     <td width="50%">
-      <h3>🛡️ AES-256-GCM Encryption</h3>
-      All message payloads are authenticated and encrypted locally using 256-bit symmetric keys derived via SHA-256 KDF with fresh 96-bit random nonces.
+      <h3>🛡️ SAS Safety Number Verification</h3>
+      Derives a 6-digit Short Authentication String (<code>XXX-XXX</code>) per session (<code>/verify</code> or <code>Ctrl+V</code>) for out-of-band verification against active Man-in-the-Middle (MITM) attacks.
+    </td>
+    <td width="50%">
+      <h3>🕵️ Stealth Panic Camouflage Mode</h3>
+      Instant emergency hotkey (<code>Ctrl+P</code> or <code>/panic</code>) wipes session visuals and renders a realistic system shell prompt (<code>user@macbook-air:~$</code>) to protect user privacy.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <h3>📦 Encrypted File Sharing</h3>
+      Transfer images, documents, and archives via <code>/sendfile &lt;PATH&gt;</code>. Chunks files into 32 KiB payloads, encrypts each chunk locally with AES-256-GCM, and streams with TUI progress indicators.
     </td>
     <td width="50%">
       <h3>🌐 Multi-Node Global Fallback</h3>
@@ -91,11 +101,12 @@ sequenceDiagram
     Relay->>Alice: Forward Bob Public Key
 
     Note over Alice,Bob: Both Derive: SharedSecret = SHA256(X25519(PrivKey, PeerPubKey))
+    Note over Alice,Bob: Both Derive: SafetyCode = SHA256(AlicePubKey || BobPubKey) [000-000]
 
-    Note over Alice,Bob: 4. End-to-End Encrypted Messaging
-    Alice->>Relay: MSG_CHAT (AES-256-GCM Ciphertext)
+    Note over Alice,Bob: 4. End-to-End Encrypted Messaging & File Transfer
+    Alice->>Relay: MSG_CHAT / MSG_FILE_CHUNK (AES-256-GCM Ciphertext)
     Note over Relay: Server sees ONLY opaque base64 ciphertext blob!
-    Relay->>Bob: Forward MSG_CHAT
+    Relay->>Bob: Forward Packets
     Note over Bob: Decrypts payload locally using SharedSecret
 ```
 
@@ -136,6 +147,9 @@ go build -o bin/termchat     ./cmd/client
 | Command | Argument | Description |
 |:---|:---|:---|
 | `/connect` | `<USER_ID>` | Initiate a 1-on-1 encrypted session with a peer by short ID |
+| `/verify` | — | Open SAS 6-digit Safety Number verification modal |
+| `/panic` | — | Toggle Stealth Panic Camouflage Mode screen |
+| `/sendfile` | `<FILE_PATH>` | Chunk, encrypt (AES-256-GCM) and transfer a file to peer |
 | `/disconnect` | — | Leave current chat session and securely erase session key |
 | `/clear` | — | Clear current chat history viewport |
 | `/whoami` | — | Display your assigned 6-character short ID |
@@ -147,9 +161,11 @@ go build -o bin/termchat     ./cmd/client
 |:---|:---|:---|
 | `Enter` | Message Input | Send message / execute command / confirm modal |
 | `Y` / `N` | Incoming Request Modal | Accept (`Y`) or Decline (`N`) incoming request |
-| `F1` / `Esc` | Global | Toggle Help overlay / dismiss modal |
+| `Ctrl+V` | Active Session | Verify 6-digit SAS Safety Number modal |
+| `Ctrl+P` | Global | Toggle Stealth Panic Camouflage Mode screen |
 | `Ctrl+D` | Active Chat | End current encrypted session |
 | `Ctrl+C` | Global | Clean exit & restore terminal state |
+| `F1` / `Esc` | Global | Toggle Help overlay / dismiss active modal |
 | `PgUp` / `PgDn` | Chat Viewport | Scroll chat history up or down |
 
 ---
@@ -159,10 +175,41 @@ go build -o bin/termchat     ./cmd/client
 | Threat Scenario | Risk Level | TermChat Protection |
 |:---|:---:|:---|
 | **Eavesdropping Relay** | 🔴 High | All messages encrypted with AES-256-GCM before leaving client |
-| **Active Relay MITM** | 🟠 Medium | Ephemeral DH exchange — relay cannot derive symmetric key without private keys |
+| **Active Relay MITM** | 🟠 Medium | SAS Safety Number Verification (`/verify` or `Ctrl+V`) out-of-band verification |
 | **Packet Tampering** | 🔴 High | GCM 128-bit authentication tag verification rejects altered payloads |
 | **Replay Attack** | 🟡 Low | Fresh random 96-bit nonces per packet + UTC timestamp validation |
 | **Subgroup Attacks** | 🟠 Medium | RFC 7748 Curve25519 scalar clamping + zero-point verification |
+
+---
+
+## 🛠️ Project Structure
+
+```
+termchat/
+├── cmd/
+│   ├── client/
+│   │   ├── main.go          # Client bootstrapper, WebSocket loop & crypto wiring
+│   │   └── ui.go            # Bubbletea TUI model, views, modals & keybinds
+│   ├── demo/
+│   │   └── main.go          # Live end-to-end trace & demonstration script
+│   └── server/
+│       ├── main.go          # Zero-knowledge relay server
+│       └── main_test.go     # Relay integration test suite
+├── pkg/
+│   ├── crypto/
+│   │   ├── crypto.go        # X25519 DH, SHA-256 KDF, AES-GCM & SAS Safety Code
+│   │   └── crypto_test.go   # Crypto unit test suite
+│   └── protocol/
+│       ├── protocol.go      # Protocol envelope & JSON payload structs
+│       └── protocol_test.go # Protocol unit test suite
+├── Dockerfile
+├── docker-compose.yml
+├── render.yaml
+├── fly.toml
+├── go.mod
+├── go.sum
+└── README.md
+```
 
 ---
 
