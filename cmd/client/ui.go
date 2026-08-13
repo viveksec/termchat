@@ -375,6 +375,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.myID = msg.assignedID
 		m.state = stateIdle
 		m.setNotification("Connected to relay. Your ID: "+msg.assignedID, msgKindSuccess)
+		m.appendSystem("🟢 Connected to relay server! Your assigned User ID: " + msg.assignedID)
+		m = m.syncViewport()
 
 	case wsDisconnectedMsg:
 		m.state = stateConnecting
@@ -819,9 +821,17 @@ func (m model) renderWelcomeBanner() string {
 		Italic(true).
 		Render("  End-to-End Encrypted Terminal Chat  ·  X25519 + AES-256-GCM\n")
 
+	var hintStr string
+	if m.myID != "" {
+		hintStr = fmt.Sprintf("  YOUR USER ID: %s  ·  /connect <ID> to start  ·  Press F1 for help", m.myID)
+	} else {
+		hintStr = "  Press F1 for help  ·  /connect <ID> to start  ·  Ctrl+C to quit"
+	}
+
 	hint := lipgloss.NewStyle().
-		Foreground(secondaryColor).
-		Render("  Press F1 for help  ·  /connect <ID> to start  ·  Ctrl+C to quit")
+		Foreground(accentColor).
+		Bold(true).
+		Render(hintStr)
 
 	return lipgloss.JoinVertical(lipgloss.Left, banner, sub, hint)
 }
