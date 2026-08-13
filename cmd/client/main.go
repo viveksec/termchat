@@ -23,8 +23,8 @@ import (
 
 	"github.com/charmbracelet/bubbletea"
 	"github.com/gorilla/websocket"
-	"github.com/user/termchat/pkg/crypto"
-	"github.com/user/termchat/pkg/protocol"
+	"github.com/viveksec/termchat/pkg/crypto"
+	"github.com/viveksec/termchat/pkg/protocol"
 )
 
 // ─────────────────────────────────────────────────────────────

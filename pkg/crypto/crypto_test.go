@@ -3,7 +3,7 @@ package crypto_test
 import (
 	"testing"
 
-	"github.com/user/termchat/pkg/crypto"
+	"github.com/viveksec/termchat/pkg/crypto"
 )
 
 func TestKeyPairGeneration(t *testing.T) {

@@ -3,7 +3,7 @@ package protocol_test
 import (
 	"testing"
 
-	"github.com/user/termchat/pkg/protocol"
+	"github.com/viveksec/termchat/pkg/protocol"
 )
 
 func TestPacketEncodeDecode(t *testing.T) {
