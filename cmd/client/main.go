@@ -82,8 +82,8 @@ func (sc *sessionCrypto) clearSharedSecret() {
 // If the user does not specify a custom -server URL, the client automatically
 // attempts these nodes in order before falling back to local host.
 var defaultServers = []string{
+	"wss://cute-paths-stand.loca.lt/ws",
 	"ws://localhost:8080/ws",
-	"wss://termchat-relay.onrender.com/ws",
 }
 
 // wsClient manages the WebSocket connection to the relay server.
