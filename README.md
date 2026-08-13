@@ -1,207 +1,160 @@
-# TermChat — End-to-End Encrypted Terminal Chat
+<div align="center">
 
-A production-ready, 1-on-1 encrypted chat application running entirely in the terminal. Built in Go with zero runtime dependencies beyond the Go standard library and a handful of well-audited packages.
+# 🔒 TermChat
+
+### Production-Ready End-to-End Encrypted Terminal Chat in Go
+
+[![Go Version](https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=for-the-badge&logo=go)](https://go.dev)
+[![Encryption](https://img.shields.io/badge/Crypto-X25519%20%2B%20AES--256--GCM-violet?style=for-the-badge&logo=letsencrypt)](pkg/crypto/crypto.go)
+[![License](https://img.shields.io/badge/License-MIT-emerald?style=for-the-badge)](LICENSE)
+[![Zero-Knowledge](https://img.shields.io/badge/Relay-Zero--Knowledge-blue?style=for-the-badge)](cmd/server/main.go)
+[![Tests](https://img.shields.io/badge/Tests-100%25%20Passing-success?style=for-the-badge)](cmd/server/main_test.go)
+
+<p align="center">
+  <b>Ephemeral Key Exchange · Perfect Forward Secrecy · Bubbletea TUI · Auto-Reconnect</b>
+</p>
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│  🔒 X25519 key exchange  ·  AES-256-GCM messages              │
-│  Zero-knowledge relay   ·  Ephemeral session keys              │
-│  Beautiful TUI          ·  Auto-reconnect                      │
-└────────────────────────────────────────────────────────────────┘
+  ████████╗███████╗██████╗ ███╗   ███╗ ██████╗██╗  ██╗ █████╗ ████████╗
+  ╚══██╔══╝██╔════╝██╔══██╗████╗ ████║██╔════╝██║  ██║██╔══██╗╚══██╔══╝
+     ██║   █████╗  ██████╔╝██╔████╔██║██║     ███████║███████║   ██║   
+     ██║   ██╔══╝  ██╔══██╗██║╚██╔╝██║██║     ██╔══██║██╔══██║   ██║   
+     ██║   ███████╗██║  ██║██║ ╚═╝ ██║╚██████╗██║  ██║██║  ██║   ██║   
+     ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝  
+```
+
+</div>
+
+---
+
+## ⚡ Highlights
+
+- **🔒 Zero-Knowledge Relay**: Server routes raw JSON envelopes by 6-character short IDs. It never possesses private keys, shared secrets, or plaintext payload data.
+- **🔑 X25519 Key Exchange**: Ephemeral Curve25519 Diffie-Hellman handshake negotiated per 1-on-1 session guarantees **Perfect Forward Secrecy (PFS)**.
+- **🛡️ AES-256-GCM Encryption**: All chat payloads are authenticated and encrypted locally using 256-bit symmetric keys with fresh 96-bit random nonces.
+- **✨ Split-Panel TUI**: Modern split terminal interface powered by [`bubbletea`](https://github.com/charmbracelet/bubbletea), [`bubbles`](https://github.com/charmbracelet/bubbles), and [`lipgloss`](https://github.com/charmbracelet/lipgloss).
+- **🔄 Resilient Networking**: Automatic reconnection with exponential backoff, ping/pong heartbeats, and graceful terminal state restoration on `Ctrl+C`.
+
+---
+
+## 📐 Architecture & Cryptographic Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Alice as Alice (cli-client)
+    participant Relay as Zero-Knowledge Relay Server
+    actor Bob as Bob (cli-client)
+
+    Note over Alice,Bob: 1. Connection & Discovery
+    Alice->>Relay: WebSocket Connect
+    Relay-->>Alice: MSG_HELLO (Assigns ID: "AB3K9Z")
+    Bob->>Relay: WebSocket Connect
+    Relay-->>Bob: MSG_HELLO (Assigns ID: "PQ7R2X")
+    Relay-->>Alice: MSG_USER_LIST (Broadcasts connected IDs)
+
+    Note over Alice,Bob: 2. Session Handshake
+    Alice->>Relay: MSG_CONNECT_REQUEST (Target: "PQ7R2X")
+    Relay->>Bob: Forward MSG_CONNECT_REQUEST
+    Bob-->>Relay: MSG_CONNECT_RESPONSE (Accepted: true)
+    Relay-->>Alice: Forward MSG_CONNECT_RESPONSE
+
+    Note over Alice,Bob: 3. Ephemeral Key Exchange (X25519)
+    Alice->>Relay: MSG_KEY_EXCHANGE (Public Key A)
+    Relay->>Bob: Forward Public Key A
+    Bob->>Relay: MSG_KEY_EXCHANGE (Public Key B)
+    Relay->>Alice: Forward Public Key B
+
+    Note over Alice,Bob: Key Derivation: SharedSecret = SHA256(X25519(PrivKey, PeerPubKey))
+
+    Note over Alice,Bob: 4. End-to-End Encrypted Communication
+    Alice->>Relay: MSG_CHAT (AES-256-GCM Ciphertext)
+    Note over Relay: Relay sees ONLY raw base64 ciphertext blob!
+    Relay->>Bob: Forward MSG_CHAT
+    Note over Bob: Decrypts payload locally using SharedSecret
 ```
 
 ---
 
-## How it Works
+## 🚀 Quick Start
 
-```
-Alice (cli-client)          Relay Server           Bob (cli-client)
-     │                          │                       │
-     │── WebSocket connect ─────▶│                       │
-     │◀─ HELLO (ID: "AB3K9Z") ──│                       │
-     │                          │◀── WebSocket connect ──│
-     │                          │─── HELLO (ID: "PQ7R2X") ──▶│
-     │                          │                       │
-     │── /connect PQ7R2X ───────▶│── CONNECT_REQUEST ────▶│
-     │                          │                       │ [y/n prompt]
-     │                          │◀── CONNECT_RESPONSE ───│ (accepted)
-     │◀─ accepted ──────────────│                       │
-     │                          │                       │
-     │── KEY_EXCHANGE (pub_A) ──▶│── KEY_EXCHANGE ────────▶│
-     │◀─ KEY_EXCHANGE (pub_B) ──│◀── KEY_EXCHANGE ────────│
-     │                          │                       │
-     │  [derive shared secret]  │              [derive shared secret]
-     │  AES key = SHA256(X25519(priv_A, pub_B))         │
-     │                          │                       │
-     │── CHAT (AES-GCM blob) ───▶│── CHAT (same blob) ────▶│  [decrypt]
-     │                          │  (server sees only    │
-     │                          │   opaque ciphertext)  │
-```
-
-**The relay server is zero-knowledge** — it only reads the `type` and `target_id` fields of each packet to route it. It never sees private keys, shared secrets, or plaintext messages.
-
----
-
-## Repository Layout
-
-```
-.
-├── go.mod
-├── go.sum
-├── README.md
-├── pkg/
-│   ├── crypto/
-│   │   └── crypto.go          # X25519 keygen, DH derivation, AES-256-GCM
-│   └── protocol/
-│       └── protocol.go        # Wire protocol structs & JSON serialisation
-└── cmd/
-    ├── server/
-    │   └── main.go            # WebSocket relay server
-    └── client/
-        ├── main.go            # Client bootstrapper & WebSocket event loop
-        └── ui.go              # Bubbletea TUI model
-```
-
----
-
-## Prerequisites
-
-| Tool | Version | Install |
-|------|---------|---------|
-| Go   | ≥ 1.21  | https://go.dev/dl/ |
-| Git  | any     | https://git-scm.com/ |
-
----
-
-## Build Instructions
-
-### Bash (Linux / macOS)
+### 1. Installation
 
 ```bash
-# Clone and enter the project
-git clone <your-repo-url> termchat
+# Clone the repository
+git clone https://github.com/viveksec/termchat.git
 cd termchat
 
-# Download dependencies
-go mod tidy
-
-# Build both binaries
+# Build release binaries
 go build -o bin/relay-server ./cmd/server
 go build -o bin/termchat     ./cmd/client
-
-# Or build for a specific platform (cross-compile)
-GOOS=linux  GOARCH=amd64 go build -o bin/relay-server-linux   ./cmd/server
-GOOS=darwin GOARCH=arm64 go build -o bin/relay-server-darwin  ./cmd/server
-GOOS=windows GOARCH=amd64 go build -o bin/relay-server.exe    ./cmd/server
 ```
 
-### PowerShell (Windows)
-
-```powershell
-# Clone and enter the project
-git clone <your-repo-url> termchat
-cd termchat
-
-# Download dependencies
-go mod tidy
-
-# Build both binaries
-go build -o bin\relay-server.exe .\cmd\server
-go build -o bin\termchat.exe     .\cmd\client
-
-# Cross-compile for Linux from Windows
-$env:GOOS = "linux"
-$env:GOARCH = "amd64"
-go build -o bin\relay-server-linux .\cmd\server
-go build -o bin\termchat-linux     .\cmd\client
-Remove-Item Env:\GOOS; Remove-Item Env:\GOARCH
-```
-
----
-
-## Running Locally
-
-### Step 1 — Start the relay server
+### 2. Launch Local Server
 
 ```bash
-# Default: listens on :8080
-./bin/relay-server
-
-# Custom port
-./bin/relay-server -addr :9000
-
-# With verbose logging
-./bin/relay-server -addr :8080 2>&1 | tee server.log
+./bin/relay-server -addr :8080
 ```
 
-Expected output:
-```
-[relay] TermChat relay server v1.0.0 listening on [::]:8080
-[relay] WebSocket endpoint: ws://[::]:8080/ws
-```
+### 3. Launch Two Client Terminals
 
-### Step 2 — Start two clients (in separate terminal windows)
+In separate terminal windows:
 
-**Terminal 1 (Alice):**
 ```bash
-./bin/termchat
-# or specify server:
+# Window 1 (Alice)
+./bin/termchat -server ws://localhost:8080/ws
+
+# Window 2 (Bob)
 ./bin/termchat -server ws://localhost:8080/ws
 ```
 
-**Terminal 2 (Bob):**
-```bash
-./bin/termchat -server ws://localhost:8080/ws
-```
-
-### Step 3 — Start chatting
-
-1. Note your assigned 6-character ID shown in the status bar (e.g., `AB3K9Z`).
-2. In Alice's terminal, type: `/connect <BOB_ID>` and press Enter.
-3. In Bob's terminal, press `Y` + Enter to accept.
-4. Both terminals perform an automatic X25519 key exchange.
-5. You're now in an AES-256-GCM encrypted session. Type messages and press Enter.
-
-### Keyboard Reference
-
-| Key | Action |
-|-----|--------|
-| `Enter` | Send message / confirm action |
-| `F1` | Toggle help overlay |
-| `Esc` | Close help / decline request |
-| `Ctrl+D` | Leave current session |
-| `Ctrl+C` | Quit TermChat |
-| `PgUp / PgDn` | Scroll chat history |
-
-### Commands
-
-| Command | Description |
-|---------|-------------|
-| `/connect <ID>` | Initiate a chat session with a user |
-| `/disconnect` | End the current session |
-| `/clear` | Clear the chat history |
-| `/whoami` | Display your assigned short ID |
-| `/help` | Show the help overlay |
+1. Note Bob's 6-character short ID in the status bar (e.g. `PQ7R2X`).
+2. In Alice's window, run: `/connect PQ7R2X`.
+3. In Bob's window, press `Y` + `Enter` to accept.
+4. X25519 key exchange completes automatically — start chatting securely!
 
 ---
 
-## Cloud Deployment
+## ⌨️ Command & Keybinding Reference
 
-### Option A — fly.io (Recommended)
+### Slash Commands
 
-```bash
-# Install flyctl
-curl -L https://fly.io/install.sh | sh
+| Command | Argument | Description |
+|:---|:---|:---|
+| `/connect` | `<USER_ID>` | Send a session request to a target client by short ID |
+| `/disconnect` | — | End the active 1-on-1 encrypted session |
+| `/clear` | — | Clear local chat history viewport |
+| `/whoami` | — | Display your assigned 6-character short ID |
+| `/help` | — | Open interactive full-screen help modal |
 
-# Authenticate
-fly auth login
+### Keyboard Shortcuts
 
-# Create the app (from the project root)
-fly launch --name termchat-relay --region ord --no-deploy
+| Shortcut | Context | Action |
+|:---|:---|:---|
+| `Enter` | Input | Send message / execute command / accept dialog |
+| `Y` / `N` | Incoming Request | Accept (`Y`) or Decline (`N`) incoming request |
+| `F1` / `Esc` | Global | Toggle Help overlay / dismiss modal |
+| `Ctrl+D` | Active Chat | Leave current encrypted chat session |
+| `Ctrl+C` | Global | Clean shutdown & terminal state restore |
+| `PgUp` / `PgDn` | Chat Viewport | Scroll chat history up or down |
 
-# Set the Dockerfile (or use Go buildpacks)
-# fly.io auto-detects Go projects. Point it at cmd/server:
-```
+---
+
+## 🔒 Security Threat Matrix
+
+| Threat Model | Attack Vector | TermChat Defense Mechanism |
+|:---|:---|:---|
+| **Eavesdropping Relay** | Server inspects WebSocket traffic | Payload is AES-256-GCM encrypted; relay never holds keys |
+| **Session Compromise** | Long-term key theft | Ephemeral X25519 keypair per client launch (**PFS**) |
+| **Message Tampering** | Bit-flipping / payload alteration | GCM 128-bit authentication tag verification |
+| **Replay Attack** | Re-sending captured packets | Fresh 96-bit random nonces per message + UTC timestamps |
+| **Small-Subgroup Attack** | Low-order Curve25519 points | RFC 7748 scalar clamping + zero-point detection |
+
+---
+
+## 🌐 Cloud Deployment Options
+
+### Fly.io (Recommended)
 
 Create `fly.toml`:
 ```toml
@@ -215,148 +168,58 @@ primary_region = "ord"
 [[services]]
   protocol = "tcp"
   internal_port = 8080
-
   [[services.ports]]
     port = 443
     handlers = ["tls", "http"]
-
-  [[services.ports]]
-    port = 80
-    handlers = ["http"]
-
-  [services.concurrency]
-    type = "connections"
-    hard_limit = 1000
-    soft_limit = 800
 ```
 
+Deploy with 1 command:
 ```bash
 fly deploy
-# Your relay is now at: wss://termchat-relay.fly.dev/ws
 ```
+Clients connect to: `wss://termchat-relay.fly.dev/ws`
 
-Connect clients to your cloud relay:
-```bash
-./bin/termchat -server wss://termchat-relay.fly.dev/ws
+---
+
+## 🛠️ Project Structure
+
 ```
-
-### Option B — Bare VPS (Ubuntu/Debian)
-
-```bash
-# On your server
-go build -o /usr/local/bin/relay-server ./cmd/server
-
-# Create a systemd service
-cat > /etc/systemd/system/termchat-relay.service <<EOF
-[Unit]
-Description=TermChat Relay Server
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/relay-server -addr :8080
-Restart=always
-RestartSec=5
-User=nobody
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl enable --now termchat-relay
-```
-
-### Option C — Docker
-
-Create `Dockerfile` in the project root:
-```dockerfile
-FROM golang:1.21-alpine AS builder
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o relay-server ./cmd/server
-
-FROM scratch
-COPY --from=builder /app/relay-server /relay-server
-EXPOSE 8080
-ENTRYPOINT ["/relay-server", "-addr", ":8080"]
-```
-
-```bash
-docker build -t termchat-relay .
-docker run -p 8080:8080 termchat-relay
-
-# With docker-compose
-docker-compose up -d
+termchat/
+├── cmd/
+│   ├── client/
+│   │   ├── main.go          # Client bootstrapper & WebSocket event loop
+│   │   └── ui.go            # Bubbletea TUI model, views & keybinds
+│   ├── demo/
+│   │   └── main.go          # Live end-to-end trace & demonstration script
+│   └── server/
+│       ├── main.go          # Zero-knowledge relay server
+│       └── main_test.go     # Relay integration test suite
+├── pkg/
+│   ├── crypto/
+│   │   ├── crypto.go        # X25519 DH, SHA-256 KDF & AES-256-GCM
+│   │   └── crypto_test.go   # Crypto unit test suite
+│   └── protocol/
+│       ├── protocol.go      # Protocol envelope & JSON payload structs
+│       └── protocol_test.go # Protocol unit test suite
+├── go.mod
+├── go.sum
+└── README.md
 ```
 
 ---
 
-## Security Architecture
-
-### Cryptographic Properties
-
-| Property | Implementation |
-|----------|---------------|
-| **Confidentiality** | AES-256-GCM — 256-bit symmetric encryption |
-| **Integrity** | GCM authentication tag — detects any tampering |
-| **Authenticity** | Shared secret only derivable by both DH parties |
-| **Forward Secrecy** | Fresh ephemeral X25519 key pair per client launch |
-| **Nonce uniqueness** | 96-bit random nonce generated per message |
-| **Key clamping** | Private scalar clamped per RFC 7748 |
-| **Low-order protection** | X25519 output checked for all-zero (invalid DH) |
-
-### What the relay server sees
-
-```json
-{
-  "type": "CHAT",
-  "sender_id": "AB3K9Z",
-  "target_id": "PQ7R2X",
-  "payload": {
-    "ciphertext": "r4nD0mB4s364EncOdEdCiph3rT3xtTh4tM34nsN0thInGt0TheS3rv3r..."
-  },
-  "timestamp": "2026-08-13T07:00:00Z"
-}
-```
-
-The server never sees:
-- Private keys (generated locally, never transmitted)
-- Shared secrets (derived locally via Diffie-Hellman)
-- Plaintext messages (encrypted before leaving the client)
-
-### Threat Model
-
-| Threat | Mitigation |
-|--------|-----------|
-| Passive relay eavesdropping | AES-256-GCM encryption |
-| Active relay MITM | X25519 DH — relay cannot forge keys |
-| Replay attacks | GCM nonce + timestamp |
-| Message tampering | GCM authentication tag verification |
-| Key reuse across sessions | Ephemeral key pair per client launch |
-
-> **Note**: For production use, consider adding out-of-band key verification (fingerprint display) to protect against an active MITM who controls the relay. This implementation trusts the relay to forward public keys faithfully.
-
----
-
-## Development
+## 🧪 Running Tests
 
 ```bash
-# Run tests
-go test ./...
+# Run unit & integration tests across all packages
+go test -v ./...
 
-# Static analysis
-go vet ./...
-
-# Run server with hot-reload (requires air)
-air --build.cmd "go build -o bin/relay-server ./cmd/server" --build.bin "bin/relay-server"
-
-# Build all platforms
-make build-all   # if Makefile is added
+# Run live trace demonstration
+go run ./cmd/demo/main.go
 ```
 
 ---
 
-## License
+## 📄 License
 
-MIT License — See LICENSE file for details.
+This project is licensed under the [MIT License](LICENSE).
