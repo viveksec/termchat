@@ -571,7 +571,7 @@ func (m *model) handleEnter() []tea.Cmd {
 		m.input.SetValue("")
 		return cmds
 
-	case stateIdle, stateAwaitingResponse:
+	case stateConnecting, stateIdle, stateAwaitingResponse:
 		if raw == "" {
 			return nil
 		}
@@ -647,7 +647,11 @@ func (m *model) processCommand(input string) []tea.Cmd {
 		*m = m.syncViewport()
 
 	case "/whoami":
-		m.setNotification("Your ID: "+m.myID, msgKindSuccess)
+		if m.myID != "" {
+			m.setNotification("Your ID: "+m.myID, msgKindSuccess)
+		} else {
+			m.setNotification("Connecting to relay server... User ID not assigned yet.", msgKindSystem)
+		}
 
 	case "/sendfile":
 		if m.state != stateChat {
