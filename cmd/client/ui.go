@@ -606,7 +606,7 @@ func (m *model) processCommand(input string) []tea.Cmd {
 
 	switch cmd {
 	case "/help":
-		m.showHelp = true
+		m.showHelp = !m.showHelp
 
 	case "/connect":
 		if len(args) == 0 {
