@@ -446,6 +446,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendSystem("Peer disconnected: " + msg.reason)
 		}
 		m.peerID = ""
+		m.safetyNumber = ""
+		m.showSafetyModal = false
 		m = m.syncViewport()
 
 	case wsErrorMsg:
@@ -631,6 +633,8 @@ func (m *model) processCommand(input string) []tea.Cmd {
 			m.appendSystem("You left the session.")
 			m.state = stateIdle
 			m.peerID = ""
+			m.safetyNumber = ""
+			m.showSafetyModal = false
 			*m = m.syncViewport()
 		} else {
 			m.setNotification("You are not in an active session.", msgKindSystem)
@@ -652,7 +656,7 @@ func (m *model) processCommand(input string) []tea.Cmd {
 			m.setNotification("Usage: /sendfile <FILE_PATH>", msgKindError)
 			return nil
 		}
-		filePath := args[0]
+		filePath := strings.Join(args, " ")
 		if _, err := os.Stat(filePath); os.IsNotExist(err) {
 			m.setNotification("File not found: "+filePath, msgKindError)
 			return nil
