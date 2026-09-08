@@ -1,78 +1,79 @@
-# TermChat Cloudflare Worker Relay
+# Cloudflare relay
 
-Deploy the TermChat zero-knowledge relay to Cloudflare Workers. Clients connect with the **same WebSocket JSON protocol** as the Go relay server — no client changes beyond the `-server` URL.
+This directory contains the TermChat relay Worker. It uses one Durable Object instance as the global room and implements the same JSON packet protocol as the Go relay in `cmd/server`.
+
+## Production endpoint
+
+The current deployed Worker is:
+
+```text
+https://termchat-relay.meetkhamar3501.workers.dev
+```
+
+Clients use its WebSocket endpoint:
+
+```text
+wss://termchat-relay.meetkhamar3501.workers.dev/ws
+```
+
+Health check:
+
+```bash
+curl https://termchat-relay.meetkhamar3501.workers.dev/health
+```
 
 ## Deploy
+
+Requirements: Node.js and a Cloudflare account with Wrangler access.
 
 ```bash
 cd cloudflare
 npm install
-npx wrangler login          # once
+npx wrangler login
 npx wrangler deploy
 ```
 
-After deploy, Wrangler prints your worker URL, e.g.:
-
-```
-https://termchat-relay.<your-subdomain>.workers.dev
-```
-
-Clients connect with:
+Wrangler prints the deployed URL. Use that hostname with `wss://` and the `/ws` path when configuring clients:
 
 ```bash
-export TERMCHAT_SERVER=wss://termchat-relay.<your-subdomain>.workers.dev/ws
-go run ../cmd/client
-
-# or explicitly:
-go run ../cmd/client -server wss://termchat-relay.<your-subdomain>.workers.dev/ws
+go run ../cmd/client -server wss://YOUR_WORKER_HOST/ws
 ```
 
-## Local dev (test before deploy)
+The Worker configuration is in [wrangler.toml](wrangler.toml). It defines the `RELAY` Durable Object binding and the `RelayServer` SQLite-backed Durable Object migration.
+
+## Local development
+
+Start the Worker:
 
 ```bash
 cd cloudflare
 npm install
 npm run dev
-# Worker runs at http://127.0.0.1:8787
 ```
 
-Terminal 1 — relay:
-
-```bash
-cd cloudflare && npm run dev
-```
-
-Terminal 2 & 3 — clients:
+Wrangler normally serves it at `http://127.0.0.1:8787`. In separate terminals, run two clients:
 
 ```bash
 go run ./cmd/client -server ws://127.0.0.1:8787/ws
 ```
 
-Use `/connect <PEER_ID>` in each client to start an encrypted chat (same as local mode).
+Use `/whoami` to see each temporary ID, then `/connect USER_ID` to begin a session.
 
 ## Endpoints
 
-| Path | Description |
-|------|-------------|
-| `/ws` | WebSocket relay (same protocol as Go server) |
-| `/health` | JSON health check |
-| `/` | Plain-text status page |
+| Path | Method | Purpose |
+| --- | --- | --- |
+| `/` | GET | Plain-text service status |
+| `/health` | GET | JSON health and version response |
+| `/ws` | WebSocket upgrade | Relay connection |
+
+Other paths return `404`. Non-WebSocket requests to `/ws` return `426 Expected WebSocket`.
 
 ## Architecture
 
-- **Worker** — routes HTTP/WebSocket to a single global Durable Object
-- **Durable Object (`RelayServer`)** — holds all active WebSocket sessions, assigns 6-char IDs, routes packets (zero-knowledge, same logic as `cmd/server`)
+- The Worker handles HTTP routing and forwards `/ws` requests to the Durable Object.
+- The Durable Object assigns six-character client IDs and stores active WebSocket attachments.
+- The relay routes connection requests, key exchanges, chat packets, and file chunks by target ID.
+- The relay does not derive encryption keys or decrypt chat payloads.
 
-## Remote host with Go server (alternative)
-
-If you prefer a VPS/Docker relay instead of Cloudflare:
-
-```bash
-# On the host (open port 8080 or set PORT)
-PORT=8080 PUBLIC_HOST=relay.example.com PUBLIC_TLS=true ./relay-server
-
-# On clients
-go run ./cmd/client -server wss://relay.example.com/ws
-```
-
-Or use the included `Dockerfile` / `render.yaml` for Render.com deployment.
+For the client commands, local Go relay, tests, and security model, see the main [README](../README.md).

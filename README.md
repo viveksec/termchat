@@ -1,258 +1,170 @@
-<div align="center">
+# TermChat
 
-# 🔒 TermChat
+TermChat is an open-source terminal chat client with end-to-end encrypted one-to-one sessions. Clients discover one another through a relay, then exchange ephemeral X25519 public keys and encrypt chat data locally with AES-256-GCM.
 
-### Zero-Knowledge, End-to-End Encrypted Terminal 1-on-1 Chat
+The relay assigns temporary six-character IDs and forwards protocol packets. It does not receive private keys, shared secrets, or plaintext chat messages.
 
-[![Go Version](https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=for-the-badge&logo=go)](https://go.dev)
-[![Global Install](https://img.shields.io/badge/Global%20Install-1--Liner-purple?style=for-the-badge&logo=terminal)](https://github.com/viveksec/termchat)
-[![Crypto](https://img.shields.io/badge/Crypto-X25519%20%2B%20AES--256--GCM-violet?style=for-the-badge&logo=letsencrypt)](pkg/crypto/crypto.go)
-[![License](https://img.shields.io/badge/License-MIT-emerald?style=for-the-badge)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-100%25%20Passing-success?style=for-the-badge)](cmd/server/main_test.go)
+## Current relay
 
-<p align="center">
-  <b>Chat securely with anyone in Surat, Mumbai, New York, or Tokyo — straight from your terminal.</b><br>
-  <i>No accounts · No phone numbers · No data collection · Zero-Knowledge Relay</i>
-</p>
+The default client relay is the deployed Cloudflare Worker:
 
-```
-  ████████╗███████╗██████╗ ███╗   ███╗ ██████╗██╗  ██╗ █████╗ ████████╗
-  ╚══██╔══╝██╔════╝██╔══██╗████╗ ████║██╔════╝██║  ██║██╔══██╗╚══██╔══╝
-     ██║   █████╗  ██████╔╝██╔████╔██║██║     ███████║███████║   ██║   
-     ██║   ██╔══╝  ██╔══██╗██║╚██╔╝██║██║     ██╔══██║██╔══██║   ██║   
-     ██║   ███████╗██║  ██║██║ ╚═╝ ██║╚██████╗██║  ██║██║  ██║   ██║   
-     ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝  
+```text
+wss://termchat-relay.meetkhamar3501.workers.dev/ws
 ```
 
----
+Health check: <https://termchat-relay.meetkhamar3501.workers.dev/health>
 
-### ⚡ Run Anywhere in 1 Command (Zero Setup)
+## Quick start
+
+### Use the included Linux binary
 
 ```bash
-go run github.com/viveksec/termchat/cmd/client@latest
+chmod +x bin/termchat-linux
+./bin/termchat-linux
 ```
 
-</div>
-
----
-
-## ✨ Features at a Glance
-
-<table>
-  <tr>
-    <td width="50%">
-      <h3>🔒 Zero-Knowledge Architecture</h3>
-      The central relay server routes raw JSON packets using anonymous 6-character short IDs. It never possesses private keys, shared secrets, or unencrypted message payloads.
-    </td>
-    <td width="50%">
-      <h3>🔑 Ephemeral Perfect Forward Secrecy</h3>
-      Every chat session negotiates an ephemeral <b>X25519 Curve25519</b> Diffie-Hellman key pair. Even if past keys were compromised, prior session plaintexts remain mathematically unrecoverable.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <h3>🛡️ SAS Safety Number Verification</h3>
-      Derives a 6-digit Short Authentication String (<code>XXX-XXX</code>) per session (<code>/verify</code> or <code>Ctrl+V</code>) for out-of-band verification against active Man-in-the-Middle (MITM) attacks.
-    </td>
-    <td width="50%">
-      <h3>🕵️ Stealth Panic Camouflage Mode</h3>
-      Instant emergency hotkey (<code>Ctrl+P</code> or <code>/panic</code>) wipes session visuals and renders a realistic system shell prompt (<code>user@macbook-air:~$</code>) to protect user privacy.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <h3>📦 Encrypted File Sharing</h3>
-      Transfer images, documents, and archives via <code>/sendfile &lt;PATH&gt;</code>. Chunks files into 32 KiB payloads, encrypts each chunk locally with AES-256-GCM, and streams with TUI progress indicators.
-    </td>
-    <td width="50%">
-      <h3>🌐 Multi-Node Global Fallback</h3>
-      Connects out-of-the-box across cities (Surat ↔ Mumbai ↔ Worldwide) with automated multi-node failover cluster support.
-    </td>
-  </tr>
-</table>
-
----
-
-## 📐 Architecture & Key Exchange Flow
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Alice as 👩 Alice (Surat)
-    participant Relay as 🌐 Global Relay Server
-    actor Bob as 👨 Bob (Mumbai)
-
-    Note over Alice,Bob: 1. Connection & Discovery
-    Alice->>Relay: WebSocket Connect
-    Relay-->>Alice: MSG_HELLO (Assigns ID: "ZURSDJ")
-    Bob->>Relay: WebSocket Connect
-    Relay-->>Bob: MSG_HELLO (Assigns ID: "J93XNR")
-
-    Note over Alice,Bob: 2. Session Initiation & Acceptance
-    Alice->>Relay: /connect J93XNR
-    Relay->>Bob: Forward Request
-    Bob-->>Relay: Accept Request (Y)
-    Relay-->>Alice: Forward Acceptance
-
-    Note over Alice,Bob: 3. Ephemeral X25519 Diffie-Hellman Key Exchange
-    Alice->>Relay: MSG_KEY_EXCHANGE (Alice Public Key)
-    Relay->>Bob: Forward Alice Public Key
-    Bob->>Relay: MSG_KEY_EXCHANGE (Bob Public Key)
-    Relay->>Alice: Forward Bob Public Key
-
-    Note over Alice,Bob: Both Derive: SharedSecret = SHA256(X25519(PrivKey, PeerPubKey))
-    Note over Alice,Bob: Both Derive: SafetyCode = SHA256(AlicePubKey || BobPubKey) [000-000]
-
-    Note over Alice,Bob: 4. End-to-End Encrypted Messaging & File Transfer
-    Alice->>Relay: MSG_CHAT / MSG_FILE_CHUNK (AES-256-GCM Ciphertext)
-    Note over Relay: Server sees ONLY opaque base64 ciphertext blob!
-    Relay->>Bob: Forward Packets
-    Note over Bob: Decrypts payload locally using SharedSecret
-```
-
----
-
-## 🚀 Quick Start Guide
-
-### Option 1: Instant One-Liner (No cloning required)
+The client uses the current Cloudflare relay automatically. To select another relay:
 
 ```bash
-go run github.com/viveksec/termchat/cmd/client@latest
+./bin/termchat-linux -server wss://example.com/ws
 ```
 
-### Option 2: Clone & Build
+### Build from source
+
+Requirements: Go 1.23 or newer.
 
 ```bash
-# Clone the repository
 git clone https://github.com/viveksec/termchat.git
 cd termchat
+go run ./cmd/client
+```
 
-# Build release binaries
-go build -o bin/relay-server ./cmd/server
-go build -o bin/termchat     ./cmd/client
+Or build a local binary:
 
-# Launch local relay server (optional)
-./bin/relay-server -addr :8080
-
-# Launch client
+```bash
+mkdir -p bin
+go build -o bin/termchat ./cmd/client
 ./bin/termchat
 ```
 
-### Option 3: Remote Host (One Server, Many Clients)
+### Downloaded binaries
 
-**Host machine** — start the relay (pick one):
+The `bin/` directory contains builds for:
 
-```bash
-# Go relay (VPS, Docker, Render)
-PORT=8080 PUBLIC_HOST=relay.example.com PUBLIC_TLS=true ./bin/relay-server
+| File | Platform |
+| --- | --- |
+| `termchat-linux-amd64` | Linux x86_64 |
+| `termchat-linux-arm64` | Linux ARM64 |
+| `termchat-macos-amd64` | macOS Intel |
+| `termchat-macos-arm64` | macOS Apple Silicon |
+| `termchat-windows-amd64.exe` | Windows x86_64 |
+| `termchat-windows-arm64.exe` | Windows ARM64 |
 
-# Or Cloudflare Worker (see cloudflare/README.md)
-cd cloudflare && npm install && npx wrangler deploy
-```
-
-**Client machines** — point at the host relay:
-
-```bash
-# Cloudflare Worker (wss is automatic)
-export TERMCHAT_SERVER=wss://termchat-relay.<your-subdomain>.workers.dev/ws
-go run ./cmd/client
-
-# Self-hosted VPS / Docker / Render
-go run ./cmd/client -server wss://relay.example.com/ws
-```
-
-Connection logic (`/connect`, key exchange, encrypted chat) is unchanged — only the relay URL differs.
-
----
-
-## ⌨️ Command & Keybinding Reference
-
-### Slash Commands
-
-| Command | Argument | Description |
-|:---|:---|:---|
-| `/connect` | `<USER_ID>` | Initiate a 1-on-1 encrypted session with a peer by short ID |
-| `/verify` | — | Open SAS 6-digit Safety Number verification modal |
-| `/panic` | — | Toggle Stealth Panic Camouflage Mode screen |
-| `/sendfile` | `<FILE_PATH>` | Chunk, encrypt (AES-256-GCM) and transfer a file to peer |
-| `/disconnect` | — | Leave current chat session and securely erase session key |
-| `/clear` | — | Clear current chat history viewport |
-| `/whoami` | — | Display your assigned 6-character short ID |
-| `/help` | — | Toggle interactive full-screen help modal |
-
-### Keyboard Shortcuts
-
-| Shortcut | Context | Action |
-|:---|:---|:---|
-| `Enter` | Message Input | Send message / execute command / confirm modal |
-| `Y` / `N` | Incoming Request Modal | Accept (`Y`) or Decline (`N`) incoming request |
-| `Ctrl+V` | Active Session | Verify 6-digit SAS Safety Number modal |
-| `Ctrl+P` | Global | Toggle Stealth Panic Camouflage Mode screen |
-| `Ctrl+D` | Active Chat | End current encrypted session |
-| `Ctrl+C` | Global | Clean exit & restore terminal state |
-| `F1` / `Esc` | Global | Toggle Help overlay / dismiss active modal |
-| `PgUp` / `PgDn` | Chat Viewport | Scroll chat history up or down |
-
----
-
-## 🔒 Security & Threat Model
-
-| Threat Scenario | Risk Level | TermChat Protection |
-|:---|:---:|:---|
-| **Eavesdropping Relay** | 🔴 High | All messages encrypted with AES-256-GCM before leaving client |
-| **Active Relay MITM** | 🟠 Medium | SAS Safety Number Verification (`/verify` or `Ctrl+V`) out-of-band verification |
-| **Packet Tampering** | 🔴 High | GCM 128-bit authentication tag verification rejects altered payloads |
-| **Replay Attack** | 🟡 Low | Fresh random 96-bit nonces per packet + UTC timestamp validation |
-| **Subgroup Attacks** | 🟠 Medium | RFC 7748 Curve25519 scalar clamping + zero-point verification |
-
----
-
-## 🛠️ Project Structure
-
-```
-termchat/
-├── cmd/
-│   ├── client/
-│   │   ├── main.go          # Client bootstrapper, WebSocket loop & crypto wiring
-│   │   └── ui.go            # Bubbletea TUI model, views, modals & keybinds
-│   ├── demo/
-│   │   └── main.go          # Live end-to-end trace & demonstration script
-│   └── server/
-│       ├── main.go          # Zero-knowledge relay server
-│       └── main_test.go     # Relay integration test suite
-├── pkg/
-│   ├── crypto/
-│   │   ├── crypto.go        # X25519 DH, SHA-256 KDF, AES-GCM & SAS Safety Code
-│   │   └── crypto_test.go   # Crypto unit test suite
-│   └── protocol/
-│       ├── protocol.go      # Protocol envelope & JSON payload structs
-│       └── protocol_test.go # Protocol unit test suite
-├── Dockerfile
-├── docker-compose.yml
-├── cloudflare/              # Cloudflare Worker relay (deploy to edge)
-│   ├── src/index.ts         # Worker entry + Durable Object relay
-│   └── wrangler.toml
-├── render.yaml
-├── fly.toml
-├── go.mod
-├── go.sum
-└── README.md
-```
-
----
-
-## 🧪 Testing & Verification
+Run the binary that matches the operating system and architecture. Release builds can be regenerated with:
 
 ```bash
-# Run unit & integration test suite across all packages
-go test -v ./...
-
-# Run live trace demonstration
-go run ./cmd/demo/main.go
+./build-cross-platform.sh
 ```
 
----
+## Using the client
 
-## 📄 License
+1. Start the client on two machines.
+2. Each client receives a temporary ID shown in the user list.
+3. On one client, enter `/connect USER_ID`.
+4. Accept the request on the other client.
+5. Verify the safety number out of band with `/verify` or `Ctrl+V`.
+6. Send messages after the encrypted session is established.
 
-Distributed under the [MIT License](LICENSE).
+Commands:
+
+| Command | Purpose |
+| --- | --- |
+| `/connect USER_ID` | Request a session with another online user |
+| `/disconnect` or `/leave` | End the current session |
+| `/sendfile PATH` | Send an encrypted file to the peer |
+| `/verify` | Display the session safety number |
+| `/whoami` | Display your temporary user ID |
+| `/clear` | Clear chat history |
+| `/panic` | Show the privacy screen |
+| `/help` | Show built-in help |
+
+Press `F1` for help and `Ctrl+C` to exit. Use `-log FILE` when troubleshooting connection problems:
+
+```bash
+./bin/termchat-linux -log /tmp/termchat.log
+```
+
+The server can also be selected with `TERMCHAT_SERVER`:
+
+```bash
+export TERMCHAT_SERVER=wss://example.com/ws
+./bin/termchat-linux
+```
+
+## Run a local Go relay
+
+The repository includes a self-hosted Go relay for local development or a server you operate yourself:
+
+```bash
+go run ./cmd/server -addr :8080
+```
+
+In another terminal:
+
+```bash
+go run ./cmd/client -server ws://localhost:8080/ws
+```
+
+The Go relay supports `PORT`, `PUBLIC_HOST`, and `PUBLIC_TLS` for deployment environments. For Docker-based deployments, see [Dockerfile](Dockerfile) and [docker-compose.yml](docker-compose.yml). The included [render.yaml](render.yaml) is an optional Render deployment configuration.
+
+## Cloudflare Worker relay
+
+The production relay is implemented with a Cloudflare Worker and Durable Object. Deployment and local Worker development instructions are in [cloudflare/README.md](cloudflare/README.md).
+
+```bash
+cd cloudflare
+npm install
+npx wrangler login
+npx wrangler deploy
+```
+
+Clients connect to the deployed Worker at its `/ws` path using `wss://`.
+
+## Development
+
+Run all Go tests:
+
+```bash
+go test ./...
+```
+
+Run the demo:
+
+```bash
+go run ./cmd/demo
+```
+
+The protocol and cryptography packages have focused unit tests. The relay tests cover connection IDs, user-list broadcasts, routing, and an encrypted session flow.
+
+## Repository layout
+
+```text
+cmd/client/       Terminal client and WebSocket connection manager
+cmd/server/       Go WebSocket relay
+cmd/demo/         Protocol and encryption demonstration
+pkg/crypto/       X25519, key derivation, AES-GCM, and safety numbers
+pkg/protocol/    Shared JSON packet types
+cloudflare/       Cloudflare Worker relay and Durable Object
+scripts/test-relay/Relay test utility
+bin/              Cross-platform client and relay binaries
+```
+
+## Security notes
+
+- Chat payloads are encrypted before they are sent to the relay.
+- Each client creates an ephemeral X25519 key pair for its process session.
+- AES-GCM authenticates encrypted messages and file chunks.
+- The safety number should be compared through a separate trusted channel.
+- The relay still sees connection metadata such as temporary IDs, timing, and packet routing fields.
+
+TermChat is provided under the [MIT License](LICENSE).
