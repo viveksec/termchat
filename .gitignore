@@ -1,5 +1,9 @@
 # Binaries
 bin/
+client
+termchat-client
+termchat-client-linux
+dist/
 *.exe
 *.exe.log
 *.dll
@@ -14,3 +18,21 @@ bin/
 .DS_Store
 .vscode/
 .idea/
+
+# Cloudflare Worker
+node_modules/
+cloudflare/node_modules/
+cloudflare/.wrangler/
+
+# Local environment and generated output
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.zip
+error.log

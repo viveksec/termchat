@@ -160,13 +160,9 @@ func (s *relayServer) notifyPeerDisconnected(recipientID, disconnectedID string)
 	}
 
 	// Clear peer association.
-	s.mu.Lock()
-	if r, exists := s.clients[recipientID]; exists {
-		r.mu.Lock()
-		r.peerID = ""
-		r.mu.Unlock()
-	}
-	s.mu.Unlock()
+	recipient.mu.Lock()
+	recipient.peerID = ""
+	recipient.mu.Unlock()
 
 	payload := protocol.DisconnectPayload{
 		Reason: fmt.Sprintf("peer %s disconnected", disconnectedID),
@@ -306,14 +302,12 @@ func (s *relayServer) handleConnectResponse(sender *client, pkt *protocol.Packet
 
 	if resp.Accepted {
 		// Record the peer association so disconnect notifications can be sent.
-		s.mu.Lock()
 		sender.mu.Lock()
 		sender.peerID = pkt.TargetID
 		sender.mu.Unlock()
 		target.mu.Lock()
 		target.peerID = sender.id
 		target.mu.Unlock()
-		s.mu.Unlock()
 	}
 
 	data, err := pkt.Encode()
@@ -347,14 +341,12 @@ func (s *relayServer) forwardToTarget(sender *client, pkt *protocol.Packet) {
 
 	// Handle disconnect: clear peer associations.
 	if pkt.Type == protocol.MsgDisconnect {
-		s.mu.Lock()
 		sender.mu.Lock()
 		sender.peerID = ""
 		sender.mu.Unlock()
 		target.mu.Lock()
 		target.peerID = ""
 		target.mu.Unlock()
-		s.mu.Unlock()
 	}
 
 	data, err := pkt.Encode()
@@ -538,8 +530,18 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func defaultListenAddr() string {
+	if port := os.Getenv("PORT"); port != "" {
+		if port[0] == ':' {
+			return port
+		}
+		return ":" + port
+	}
+	return ":8080"
+}
+
 func main() {
-	addr := flag.String("addr", ":8080", "TCP address for the relay server to listen on")
+	addr := flag.String("addr", defaultListenAddr(), "TCP address for the relay server to listen on")
 	flag.Parse()
 
 	srv := newRelayServer()
@@ -571,6 +573,13 @@ func main() {
 
 	log.Printf("[relay] TermChat relay server v%s listening on %s", serverVersion, listener.Addr())
 	log.Printf("[relay] WebSocket endpoint: ws://%s/ws", listener.Addr())
+	if publicHost := os.Getenv("PUBLIC_HOST"); publicHost != "" {
+		scheme := "ws"
+		if os.Getenv("PUBLIC_TLS") == "true" {
+			scheme = "wss"
+		}
+		log.Printf("[relay] Public WebSocket endpoint: %s://%s/ws", scheme, publicHost)
+	}
 
 	// Graceful shutdown on SIGINT or SIGTERM.
 	stop := make(chan os.Signal, 1)

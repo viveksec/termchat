@@ -138,6 +138,31 @@ go build -o bin/termchat     ./cmd/client
 ./bin/termchat
 ```
 
+### Option 3: Remote Host (One Server, Many Clients)
+
+**Host machine** — start the relay (pick one):
+
+```bash
+# Go relay (VPS, Docker, Render)
+PORT=8080 PUBLIC_HOST=relay.example.com PUBLIC_TLS=true ./bin/relay-server
+
+# Or Cloudflare Worker (see cloudflare/README.md)
+cd cloudflare && npm install && npx wrangler deploy
+```
+
+**Client machines** — point at the host relay:
+
+```bash
+# Cloudflare Worker (wss is automatic)
+export TERMCHAT_SERVER=wss://termchat-relay.<your-subdomain>.workers.dev/ws
+go run ./cmd/client
+
+# Self-hosted VPS / Docker / Render
+go run ./cmd/client -server wss://relay.example.com/ws
+```
+
+Connection logic (`/connect`, key exchange, encrypted chat) is unchanged — only the relay URL differs.
+
 ---
 
 ## ⌨️ Command & Keybinding Reference
@@ -204,6 +229,9 @@ termchat/
 │       └── protocol_test.go # Protocol unit test suite
 ├── Dockerfile
 ├── docker-compose.yml
+├── cloudflare/              # Cloudflare Worker relay (deploy to edge)
+│   ├── src/index.ts         # Worker entry + Durable Object relay
+│   └── wrangler.toml
 ├── render.yaml
 ├── fly.toml
 ├── go.mod

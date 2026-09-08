@@ -190,7 +190,7 @@ const (
 	// stateAwaitingResponse — sent a /connect request, waiting for peer to respond.
 	stateAwaitingResponse
 	// statePendingIncoming — received an incoming connect request, showing accept/decline.
-	statePendingIncoming
+	// statePendingIncoming
 	// stateHandshake — both parties accepted; key exchange in progress.
 	stateHandshake
 	// stateChat — in an active encrypted chat session.
@@ -282,13 +282,13 @@ type model struct {
 	height int
 
 	// Client state.
-	state      uiState
-	myID       string
+	state       uiState
+	myID        string
 	onlineUsers []string
 
 	// Active session state.
-	peerID    string
-	messages  []chatMessage
+	peerID   string
+	messages []chatMessage
 
 	// Incoming request state.
 	incomingFrom    string
@@ -299,7 +299,7 @@ type model struct {
 	inputMode string // "command" or "message"
 
 	// Chat viewport.
-	viewport     viewport.Model
+	viewport      viewport.Model
 	viewportReady bool
 
 	// Error / notification display.
@@ -339,9 +339,9 @@ func initialModel(sendCh chan<- outgoingMsg) model {
 	ti.Prompt = "❯ "
 
 	return model{
-		state:   stateConnecting,
-		input:   ti,
-		sendCh:  sendCh,
+		state:    stateConnecting,
+		input:    ti,
+		sendCh:   sendCh,
 		messages: []chatMessage{},
 	}
 }
@@ -391,11 +391,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case wsConnectRequestMsg:
 		if m.state == stateIdle {
+			// m.state = statePendingIncoming
+			m.incomingFrom = msg.fromID
+			// m.incomingMessage = msg.message
+			m.appendSystem(fmt.Sprintf("⚡ Incoming connection request from %s. Type /connect %s to accept.", msg.fromID, msg.fromID))
+			m = m.syncViewport()
+		} else if m.state == stateAwaitingResponse && m.peerID == msg.fromID {
 			cmds = append(cmds, m.sendConnectResponse(msg.fromID, true, ""))
 			m.state = stateHandshake
-			m.peerID = msg.fromID
-			m.appendSystem(fmt.Sprintf("⚡ Connection request from %s. Auto-establishing encrypted session...", msg.fromID))
+			m.appendSystem("Mutual connection request received. Auto-establishing encrypted session…")
 			cmds = append(cmds, m.sendKeyExchange())
+			if m.pendingPeerPublicKey != "" {
+				pk := m.pendingPeerPublicKey
+				m.pendingPeerPublicKey = ""
+				cmds = append(cmds, func() tea.Msg {
+					return peerPubKeyReceivedMsg{publicKey: pk}
+				})
+			}
 			m = m.syncViewport()
 		} else {
 			// Already in a session — auto-reject.
@@ -407,9 +419,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = stateHandshake
 			m.peerID = msg.peerID
 			m.appendSystem("Peer accepted. Performing key exchange…")
-			// Send our public key — the bootstrapper generates it and stores it
-			// via the keyExchangeReadyCmd command channel.
 			cmds = append(cmds, m.sendKeyExchange())
+			if m.pendingPeerPublicKey != "" {
+				pk := m.pendingPeerPublicKey
+				m.pendingPeerPublicKey = ""
+				cmds = append(cmds, func() tea.Msg {
+					return peerPubKeyReceivedMsg{publicKey: pk}
+				})
+			}
 		}
 
 	case wsConnectRejectedMsg:
@@ -424,14 +441,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case wsKeyExchangeMsg:
 		m = m.handleKeyExchange(msg.publicKey, &cmds)
 
+	case sharedSecretDerivedMsg:
+		if m.state == stateHandshake {
+			m.state = stateChat
+			m.peerID = msg.peerID
+			m.appendSystem(fmt.Sprintf("Secure session established. Safety Number: %s", msg.safetyNumber))
+			m = m.syncViewport()
+		}
+
 	case wsChatMsg:
 		m.appendReceived(msg.fromID, msg.text, msg.ts)
 		m = m.syncViewport()
 
 	case wsFileChunkMsg:
 		os.MkdirAll("downloads", 0755)
-		outPath := filepath.Join("downloads", msg.filename)
-		f, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		outPath := filepath.Join("downloads", filepath.Base(msg.filename))
+		flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
+		if msg.chunkIndex == 0 {
+			flags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+		}
+		f, err := os.OpenFile(outPath, flags, 0644)
 		if err == nil {
 			f.Write(msg.data)
 			f.Close()
@@ -485,11 +514,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showSafetyModal = false
 			} else if m.showHelp {
 				m.showHelp = false
-			} else if m.state == statePendingIncoming {
-				// Decline on Esc.
-				cmds = append(cmds, m.sendConnectResponse(m.incomingFrom, false, "declined"))
-				m.state = stateIdle
-				m.incomingFrom = ""
+				// } else if m.state == statePendingIncoming {
+				// 	// Decline on Esc.
+				// 	cmds = append(cmds, m.sendConnectResponse(m.incomingFrom, false, "declined"))
+				// 	m.state = stateIdle
+				// 	m.incomingFrom = ""
 			}
 
 		case tea.KeyEnter:
@@ -514,24 +543,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		default:
 			// In pending-incoming state, 'y' and 'n' are shortcuts.
-			if m.state == statePendingIncoming {
-				switch strings.ToLower(msg.String()) {
-				case "y":
-					cmds = append(cmds, m.sendConnectResponse(m.incomingFrom, true, ""))
-					m.state = stateHandshake
-					m.peerID = m.incomingFrom
-					m.incomingFrom = ""
-					m.appendSystem("Accepted connection. Performing key exchange…")
-					cmds = append(cmds, m.sendKeyExchange())
-					m = m.syncViewport()
-					return m, tea.Batch(cmds...)
-				case "n":
-					cmds = append(cmds, m.sendConnectResponse(m.incomingFrom, false, "declined"))
-					m.state = stateIdle
-					m.incomingFrom = ""
-					return m, tea.Batch(cmds...)
-				}
-			}
+			// if m.state == statePendingIncoming {
+			// 	switch strings.ToLower(msg.String()) {
+			// 	case "y":
+			// 		cmds = append(cmds, m.sendConnectResponse(m.incomingFrom, true, ""))
+			// 		m.state = stateHandshake
+			// 		m.peerID = m.incomingFrom
+			// 		m.incomingFrom = ""
+			// 		m.appendSystem("Accepted connection. Performing key exchange…")
+			// 		cmds = append(cmds, m.sendKeyExchange())
+			// 		m = m.syncViewport()
+			// 		return m, tea.Batch(cmds...)
+			// 	case "n":
+			// 		cmds = append(cmds, m.sendConnectResponse(m.incomingFrom, false, "declined"))
+			// 		m.state = stateIdle
+			// 		m.incomingFrom = ""
+			// 		return m, tea.Batch(cmds...)
+			// 	}
+			// }
 
 			var inputCmd tea.Cmd
 			m.input, inputCmd = m.input.Update(msg)
@@ -555,23 +584,44 @@ func (m *model) handleEnter() []tea.Cmd {
 	raw := strings.TrimSpace(m.input.Value())
 
 	switch m.state {
-	case statePendingIncoming:
-		switch strings.ToLower(raw) {
-		case "y", "yes":
-			cmds = append(cmds, m.sendConnectResponse(m.incomingFrom, true, ""))
-			m.state = stateHandshake
-			m.peerID = m.incomingFrom
-			m.incomingFrom = ""
-			m.appendSystem("Accepted connection. Performing key exchange…")
-			cmds = append(cmds, m.sendKeyExchange())
-			*m = m.syncViewport()
-		case "n", "no":
-			cmds = append(cmds, m.sendConnectResponse(m.incomingFrom, false, "declined"))
-			m.state = stateIdle
-			m.incomingFrom = ""
-		}
-		m.input.SetValue("")
-		return cmds
+	// case statePendingIncoming:
+	// 	if strings.HasPrefix(strings.ToLower(raw), "/connect ") {
+	// 		parts := strings.Fields(raw)
+	// 		if len(parts) == 2 && strings.ToUpper(parts[1]) == m.incomingFrom {
+	// 			raw = "y"
+	// 		} else {
+	// 			cmds = append(cmds, m.sendConnectResponse(m.incomingFrom, false, "connecting to someone else"))
+	// 			m.state = stateIdle
+	// 			m.incomingFrom = ""
+	// 			cmds = append(cmds, m.processCommand(raw)...)
+	// 			m.input.SetValue("")
+	// 			return cmds
+	// 		}
+	// 	}
+	//
+	// 	switch strings.ToLower(raw) {
+	// 	case "y", "yes":
+	// 		cmds = append(cmds, m.sendConnectResponse(m.incomingFrom, true, ""))
+	// 		m.state = stateHandshake
+	// 		m.peerID = m.incomingFrom
+	// 		m.incomingFrom = ""
+	// 		m.appendSystem("Accepted connection. Performing key exchange…")
+	// 		cmds = append(cmds, m.sendKeyExchange())
+	// 		if m.pendingPeerPublicKey != "" {
+	// 			pk := m.pendingPeerPublicKey
+	// 			m.pendingPeerPublicKey = ""
+	// 			cmds = append(cmds, func() tea.Msg {
+	// 				return peerPubKeyReceivedMsg{publicKey: pk}
+	// 			})
+	// 		}
+	// 		*m = m.syncViewport()
+	// 	case "n", "no":
+	// 		cmds = append(cmds, m.sendConnectResponse(m.incomingFrom, false, "declined"))
+	// 		m.state = stateIdle
+	// 		m.incomingFrom = ""
+	// 	}
+	// 	m.input.SetValue("")
+	// 	return cmds
 
 	case stateConnecting, stateIdle, stateAwaitingResponse:
 		if raw == "" {
@@ -715,9 +765,9 @@ func (m model) View() string {
 	}
 
 	// Incoming request dialog takes priority.
-	if m.state == statePendingIncoming {
-		return m.renderIncomingRequest()
-	}
+	// if m.state == statePendingIncoming {
+	// 	return m.renderIncomingRequest()
+	// }
 
 	leftWidth := 20
 	rightWidth := m.width - leftWidth - 4 // account for borders and gap
@@ -857,8 +907,8 @@ func (m model) renderStatusBar(width int) string {
 		left = lipgloss.NewStyle().Foreground(warningColor).Bold(true).Render("⬤ HANDSHAKE")
 	case stateChat:
 		left = statusChatStyle.Render("⬤ ENCRYPTED CHAT")
-	case statePendingIncoming:
-		left = lipgloss.NewStyle().Foreground(warningColor).Bold(true).Render("⬤ INCOMING REQUEST")
+		// case statePendingIncoming:
+		// 	left = lipgloss.NewStyle().Foreground(warningColor).Bold(true).Render("⬤ INCOMING REQUEST")
 	}
 
 	if m.myID != "" {
@@ -916,30 +966,30 @@ func (m model) renderInputBar(width int) string {
 
 // renderIncomingRequest renders the accept/decline dialog for an incoming
 // connection request.
-func (m model) renderIncomingRequest() string {
-	msg := m.incomingMessage
-	if msg == "" {
-		msg = "(no message)"
-	}
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.NewStyle().Foreground(warningColor).Bold(true).
-			Render("📨 Incoming Chat Request"),
-		"",
-		lipgloss.NewStyle().Foreground(accentColor).
-			Render(fmt.Sprintf("From: %s", m.incomingFrom)),
-		lipgloss.NewStyle().Foreground(mutedColor).
-			Render(fmt.Sprintf("Message: %s", msg)),
-		"",
-		lipgloss.NewStyle().Foreground(textColor).
-			Render("Type 'y' + Enter to Accept, 'n' + Enter to Decline"),
-		lipgloss.NewStyle().Foreground(mutedColor).Italic(true).
-			Render("(or press Y / N directly)"),
-		"",
-		m.input.View(),
-	)
-	dialog := dialogStyle.Render(content)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
-}
+// func (m model) renderIncomingRequest() string {
+// 	msg := m.incomingMessage
+// 	if msg == "" {
+// 		msg = "(no message)"
+// 	}
+// 	content := lipgloss.JoinVertical(lipgloss.Left,
+// 		lipgloss.NewStyle().Foreground(warningColor).Bold(true).
+// 			Render("📨 Incoming Chat Request"),
+// 		"",
+// 		lipgloss.NewStyle().Foreground(accentColor).
+// 			Render(fmt.Sprintf("From: %s", m.incomingFrom)),
+// 		lipgloss.NewStyle().Foreground(mutedColor).
+// 			Render(fmt.Sprintf("Message: %s", msg)),
+// 		"",
+// 		lipgloss.NewStyle().Foreground(textColor).
+// 			Render("Type 'y' + Enter to Accept, 'n' + Enter to Decline"),
+// 		lipgloss.NewStyle().Foreground(mutedColor).Italic(true).
+// 			Render("(or press Y / N directly)"),
+// 		"",
+// 		m.input.View(),
+// 	)
+// 	dialog := dialogStyle.Render(content)
+// 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+// }
 
 // renderHelp renders the full-screen help overlay.
 func (m model) renderHelp() string {
@@ -1155,14 +1205,14 @@ func (m *model) setNotification(msg string, kind messageKind) {
 // The shared secret and state transition are managed by the event loop in
 // main.go via the keyExchangeReadyCmd command channel.
 func (m model) handleKeyExchange(peerPubKey string, cmds *[]tea.Cmd) model {
-	switch m.state {
-	case stateHandshake:
-		// Both directions of key exchange may arrive in either order.
-		// Delegate to the main.go event loop which has access to our private key.
+	if m.state == stateHandshake {
 		*cmds = append(*cmds, func() tea.Msg {
 			return peerPubKeyReceivedMsg{publicKey: peerPubKey}
 		})
-	default:
+		// } else if m.state == stateAwaitingResponse || m.state == statePendingIncoming {
+	} else if m.state == stateAwaitingResponse {
+		m.pendingPeerPublicKey = peerPubKey
+	} else {
 		m.appendSystem("Received unexpected key-exchange packet — ignoring.")
 	}
 	return m

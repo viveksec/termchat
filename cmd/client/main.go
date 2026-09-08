@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -78,12 +79,30 @@ func (sc *sessionCrypto) clearSharedSecret() {
 // WebSocket client
 // ─────────────────────────────────────────────────────────────
 
-// defaultServers is the list of public global production relay endpoints.
-// If the user does not specify a custom -server URL, the client automatically
-// attempts these nodes in order before falling back to local host.
-var defaultServers = []string{
-	"wss://cute-paths-stand.loca.lt/ws",
-	"ws://localhost:8080/ws",
+// buildServerList returns relay URLs to try when connecting.
+// Order: explicit flag value, TERMCHAT_SERVER env, then local fallback.
+func buildServerList(primary string, customURL bool) []string {
+	if customURL {
+		return []string{primary}
+	}
+
+	seen := make(map[string]struct{})
+	list := make([]string, 0, 3)
+	add := func(url string) {
+		if url == "" {
+			return
+		}
+		if _, ok := seen[url]; ok {
+			return
+		}
+		seen[url] = struct{}{}
+		list = append(list, url)
+	}
+
+	add(primary)
+	add(os.Getenv("TERMCHAT_SERVER"))
+	add("ws://localhost:8080/ws")
+	return list
 }
 
 // wsClient manages the WebSocket connection to the relay server.
@@ -102,13 +121,9 @@ type wsClient struct {
 
 // newWSClient creates a wsClient with multi-server fallback support.
 func newWSClient(serverURL string, customURL bool, sc *sessionCrypto) *wsClient {
-	list := []string{serverURL}
-	if !customURL {
-		list = append(list, defaultServers...)
-	}
 	return &wsClient{
 		serverURL:  serverURL,
-		serverList: list,
+		serverList: buildServerList(serverURL, customURL),
 		customURL:  customURL,
 		sendCh:     make(chan outgoingMsg, 256),
 		sc:         sc,
@@ -119,9 +134,6 @@ func newWSClient(serverURL string, customURL bool, sc *sessionCrypto) *wsClient 
 
 // connect dials the relay server endpoints in sequence.
 func (wc *wsClient) connect() error {
-	dialer := websocket.DefaultDialer
-	dialer.HandshakeTimeout = 6 * time.Second
-
 	var lastErr error
 	for _, url := range wc.serverList {
 		select {
@@ -130,7 +142,12 @@ func (wc *wsClient) connect() error {
 		default:
 		}
 
-		conn, _, err := dialer.Dial(url, nil)
+		dialer := websocket.Dialer{
+			HandshakeTimeout: 10 * time.Second,
+		}
+		header := http.Header{}
+		header.Add("Bypass-Tunnel-Reminder", "true")
+		conn, _, err := dialer.Dial(url, header)
 		if err == nil {
 			wc.connMu.Lock()
 			wc.conn = conn
@@ -222,9 +239,9 @@ func (wc *wsClient) readMessages() {
 
 	conn.SetReadLimit(128 * 1024)
 	conn.SetReadDeadline(time.Now().Add(70 * time.Second))
-	conn.SetPongHandler(func(string) error {
+	conn.SetPingHandler(func(appData string) error {
 		conn.SetReadDeadline(time.Now().Add(70 * time.Second))
-		return nil
+		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(10*time.Second))
 	})
 
 	for {
@@ -478,7 +495,7 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			data, err := buildConnectRequestPacket(m.targetID)
 			if err != nil {
 				log.Printf("[client] failed to build connect request: %v", err)
-				return wp.inner, nil
+				return wp, nil
 			}
 			select {
 			case wp.wc.sendCh <- outgoingMsg{data: data}:
@@ -486,21 +503,21 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				log.Println("[client] send channel full — dropping connect request")
 			}
 		}
-		return wp.inner, nil
+		return wp, nil
 
 	// ── Outgoing connect response ──────────────────────────
 	case sendConnectResponseMsg:
 		data, err := buildConnectResponsePacket(m.targetID, m.accepted, m.reason)
 		if err != nil {
 			log.Printf("[client] failed to build connect response: %v", err)
-			return wp.inner, nil
+			return wp, nil
 		}
 		select {
 		case wp.wc.sendCh <- outgoingMsg{data: data}:
 		default:
 			log.Println("[client] send channel full — dropping connect response")
 		}
-		return wp.inner, nil
+		return wp, nil
 
 	// ── Outgoing key exchange ──────────────────────────────
 	case sendKeyExchangeMsg:
@@ -508,14 +525,14 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		data, err := buildKeyExchangePacket(m.peerID, pubKeyBase64)
 		if err != nil {
 			log.Printf("[client] failed to build key exchange packet: %v", err)
-			return wp.inner, nil
+			return wp, nil
 		}
 		select {
 		case wp.wc.sendCh <- outgoingMsg{data: data}:
 		default:
 			log.Println("[client] send channel full — dropping key exchange")
 		}
-		return wp.inner, nil
+		return wp, nil
 
 	// ── Peer's public key received — derive shared secret ──
 	case peerPubKeyReceivedMsg:
@@ -528,7 +545,7 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				message: "Cryptographic key exchange failed: " + err.Error(),
 			})
 			wp.inner = newInner
-			return wp.inner, cmd
+			return wp, cmd
 		}
 		wp.sc.setSharedSecret(secret)
 		safetyNum := crypto.CalculateSafetyNumber(wp.sc.keyPair.PublicKeyBase64(), m.publicKey)
@@ -537,7 +554,7 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Retrieve peerID from model state.
 		innerModel, ok := wp.inner.(model)
 		if !ok {
-			return wp.inner, nil
+			return wp, nil
 		}
 
 		// Transition TUI to chat state.
@@ -548,13 +565,13 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			peerPublicKey: m.publicKey,
 		})
 		wp.inner = newInner
-		return wp.inner, cmd
+		return wp, cmd
 
 	// ── Shared secret ready → enter chat state ─────────────
 	case sharedSecretDerivedMsg:
 		innerModel, ok := wp.inner.(model)
 		if !ok {
-			return wp.inner, nil
+			return wp, nil
 		}
 		innerModel.state = stateChat
 		innerModel.peerID = m.peerID
@@ -563,7 +580,7 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			fmt.Sprintf("🔒 Secure session established with %s (AES-256-GCM · Safety Code: %s).", m.peerID, m.safetyNumber))
 		innerModel = innerModel.syncViewport()
 		wp.inner = innerModel
-		return wp.inner, nil
+		return wp, nil
 
 	// ── Outgoing chat message ──────────────────────────────
 	case sendChatMsg:
@@ -575,19 +592,19 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				message: "Cannot send message: no active encrypted session.",
 			})
 			wp.inner = newInner
-			return wp.inner, cmd
+			return wp, cmd
 		}
 		data, err := buildChatPacket(m.peerID, secret, m.plaintext)
 		if err != nil {
 			log.Printf("[client] failed to encrypt message: %v", err)
-			return wp.inner, nil
+			return wp, nil
 		}
 		select {
 		case wp.wc.sendCh <- outgoingMsg{data: data}:
 		default:
 			log.Println("[client] send channel full — dropping chat message")
 		}
-		return wp.inner, nil
+		return wp, nil
 
 	// ── Outgoing disconnect ────────────────────────────────
 	case sendDisconnectMsg:
@@ -595,7 +612,7 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			data, err := buildDisconnectPacket(m.peerID)
 			if err != nil {
 				log.Printf("[client] failed to build disconnect packet: %v", err)
-				return wp.inner, nil
+				return wp, nil
 			}
 			select {
 			case wp.wc.sendCh <- outgoingMsg{data: data}:
@@ -603,14 +620,14 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		wp.sc.clearSharedSecret()
-		return wp.inner, nil
+		return wp, nil
 
 	// ── Outgoing encrypted file transfer ───────────────────
 	case sendFileMsg:
 		secret := wp.sc.getSharedSecret()
 		if secret == nil {
 			log.Println("[client] cannot send file: no shared secret")
-			return wp.inner, nil
+			return wp, nil
 		}
 		targetPeerID := m.peerID
 		targetFilePath := m.filePath
@@ -650,16 +667,15 @@ func (wp *wrappedProgram) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					continue
 				}
 				wp.wc.sendCh <- outgoingMsg{data: raw}
-				time.Sleep(5 * time.Millisecond) // smooth flow control
 			}
 		}()
-		return wp.inner, nil
+		return wp, nil
 	}
 
 	// For all other messages, delegate to the inner model.
 	newInner, cmd := wp.inner.Update(msg)
 	wp.inner = newInner
-	return wp.inner, cmd
+	return wp, cmd
 }
 
 func (wp *wrappedProgram) View() string {
@@ -671,8 +687,12 @@ func (wp *wrappedProgram) View() string {
 // ─────────────────────────────────────────────────────────────
 
 func main() {
-	serverURL := flag.String("server", "ws://localhost:8080/ws",
-		"WebSocket URL of the TermChat relay server")
+	defaultServer := os.Getenv("TERMCHAT_SERVER")
+	if defaultServer == "" {
+		defaultServer = "ws://localhost:8080/ws"
+	}
+	serverURL := flag.String("server", defaultServer,
+		"WebSocket URL of the TermChat relay server (or set TERMCHAT_SERVER)")
 	logFile := flag.String("log", "",
 		"Path to write debug logs (default: stderr)")
 	flag.Parse()
