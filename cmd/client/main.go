@@ -689,10 +689,10 @@ func (wp *wrappedProgram) View() string {
 func main() {
 	defaultServer := os.Getenv("TERMCHAT_SERVER")
 	if defaultServer == "" {
-		defaultServer = "ws://localhost:8080/ws"
+	    defaultServer = "wss://termchat-qdjd.onrender.com/ws"
 	}
 	serverURL := flag.String("server", defaultServer,
-		"WebSocket URL of the TermChat relay server (or set TERMCHAT_SERVER)")
+	    "WebSocket URL of the TermChat relay server (or set TERMCHAT_SERVER)")
 	logFile := flag.String("log", "",
 		"Path to write debug logs (default: stderr)")
 	flag.Parse()
