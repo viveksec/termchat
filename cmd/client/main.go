@@ -1,13 +1,13 @@
 // Package main is the entry point for the TermChat CLI client. It:
-//   1. Parses command-line flags.
-//   2. Generates an ephemeral X25519 key pair for this session.
-//   3. Dials the relay server over WebSocket with automatic reconnect.
-//   4. Runs a WebSocket read loop in a goroutine that converts server packets
-//      into Bubbletea tea.Msg events.
-//   5. Wraps the Bubbletea model's Update loop to intercept outgoing-packet
-//      messages and push them through a write channel.
-//   6. Manages the shared-secret lifecycle so the TUI model never touches
-//      raw cryptographic key material directly.
+//  1. Parses command-line flags.
+//  2. Generates an ephemeral X25519 key pair for this session.
+//  3. Dials the relay server over WebSocket with automatic reconnect.
+//  4. Runs a WebSocket read loop in a goroutine that converts server packets
+//     into Bubbletea tea.Msg events.
+//  5. Wraps the Bubbletea model's Update loop to intercept outgoing-packet
+//     messages and push them through a write channel.
+//  6. Manages the shared-secret lifecycle so the TUI model never touches
+//     raw cryptographic key material directly.
 package main
 
 import (
@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gorilla/websocket"
 	"github.com/viveksec/termchat/pkg/crypto"
 	"github.com/viveksec/termchat/pkg/protocol"
@@ -37,8 +37,8 @@ import (
 // can be written from the Bubbletea update loop and read from the write pump.
 type sessionCrypto struct {
 	mu           sync.RWMutex
-	keyPair      *crypto.KeyPair  // our ephemeral X25519 key pair
-	sharedSecret []byte           // 32-byte AES-256-GCM key derived via DH
+	keyPair      *crypto.KeyPair // our ephemeral X25519 key pair
+	sharedSecret []byte          // 32-byte AES-256-GCM key derived via DH
 }
 
 // newSessionCrypto generates a fresh ephemeral key pair and returns a
@@ -477,9 +477,9 @@ func buildDisconnectPacket(targetID string) ([]byte, error) {
 // internal command messages that require access to cryptographic state or
 // the WebSocket send channel — neither of which can be held in the pure model.
 type wrappedProgram struct {
-	inner   tea.Model
-	wc      *wsClient
-	sc      *sessionCrypto
+	inner tea.Model
+	wc    *wsClient
+	sc    *sessionCrypto
 }
 
 func (wp *wrappedProgram) Init() tea.Cmd {
@@ -689,10 +689,10 @@ func (wp *wrappedProgram) View() string {
 func main() {
 	defaultServer := os.Getenv("TERMCHAT_SERVER")
 	if defaultServer == "" {
-	    defaultServer = "wss://termchat-qdjd.onrender.com/ws"
+		defaultServer = "wss://termchat-relay.meetkhamar3501.workers.dev/ws"
 	}
 	serverURL := flag.String("server", defaultServer,
-	    "WebSocket URL of the TermChat relay server (or set TERMCHAT_SERVER)")
+		"WebSocket URL of the TermChat relay server (or set TERMCHAT_SERVER)")
 	logFile := flag.String("log", "",
 		"Path to write debug logs (default: stderr)")
 	flag.Parse()

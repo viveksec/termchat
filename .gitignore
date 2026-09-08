@@ -1,10 +1,8 @@
 # Binaries
-bin/
 /client
 /termchat-client
 /termchat-client-linux
 /dist/
-*.exe
 *.exe.log
 *.dll
 *.so

@@ -5,7 +5,7 @@
 set -e
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_DIR="$PROJECT_ROOT/dist"
+OUTPUT_DIR="$PROJECT_ROOT/bin"
 VERSION=$(git describe --tags --always 2>/dev/null || echo "dev")
 BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
@@ -47,6 +47,11 @@ for target in "${TARGETS[@]}"; do
   size=$(du -h "$OUTPUT_PATH" | cut -f1)
   echo "   ✓ Size: $size"
 done
+
+# Keep the historical Linux launcher names in sync with the release build.
+cp "$OUTPUT_DIR/termchat-linux-amd64" "$OUTPUT_DIR/termchat"
+cp "$OUTPUT_DIR/termchat-linux-amd64" "$OUTPUT_DIR/termchat-linux"
+cp "$OUTPUT_DIR/termchat-windows-amd64.exe" "$OUTPUT_DIR/termchat.exe"
 
 echo ""
 echo "✅ Build complete!"
