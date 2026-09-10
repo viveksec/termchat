@@ -34,3 +34,4 @@ cloudflare/.wrangler/
 *.pfx
 *.zip
 error.log
+/bin/

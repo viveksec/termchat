@@ -32,15 +32,25 @@ for target in "${TARGETS[@]}"; do
   read -r GOOS GOARCH OUTPUT <<< "$target"
   OUTPUT_PATH="$OUTPUT_DIR/$OUTPUT"
   
-  echo "📦 Building $GOOS/$GOARCH → $OUTPUT"
+  echo "📦 Building $GOOS/$GOARCH client → $OUTPUT"
   GOOS="$GOOS" GOARCH="$GOARCH" go build \
     -ldflags "-s -w -X main.Version=$VERSION -X main.BuildTime=$BUILD_TIME" \
     -o "$OUTPUT_PATH" \
     ./cmd/client
   
+  # Also build the server
+  SERVER_OUTPUT="${OUTPUT/termchat/termchat-server}"
+  SERVER_OUTPUT_PATH="$OUTPUT_DIR/$SERVER_OUTPUT"
+  echo "📦 Building $GOOS/$GOARCH server → $SERVER_OUTPUT"
+  GOOS="$GOOS" GOARCH="$GOARCH" go build \
+    -ldflags "-s -w -X main.Version=$VERSION -X main.BuildTime=$BUILD_TIME" \
+    -o "$SERVER_OUTPUT_PATH" \
+    ./cmd/server
+  
   # Make executable on Unix systems
   if [[ "$GOOS" != "windows" ]]; then
     chmod +x "$OUTPUT_PATH"
+    chmod +x "$SERVER_OUTPUT_PATH"
   fi
   
   # Show file size
