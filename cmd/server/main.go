@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -84,6 +85,10 @@ func (s *relayServer) run() {
 		select {
 		case c := <-s.register:
 			s.mu.Lock()
+			if old, ok := s.clients[c.id]; ok {
+				c.peerID = old.peerID
+				old.conn.Close()
+			}
 			s.clients[c.id] = c
 			s.mu.Unlock()
 			log.Printf("[relay] client connected: %s (total: %d)", c.id, s.clientCount())
@@ -91,21 +96,24 @@ func (s *relayServer) run() {
 
 		case c := <-s.unregister:
 			s.mu.Lock()
-			if _, ok := s.clients[c.id]; ok {
+			existing, ok := s.clients[c.id]
+			if ok && existing == c {
 				delete(s.clients, c.id)
 				close(c.send)
+				peerID := c.peerID
+				s.mu.Unlock()
+
+				log.Printf("[relay] client disconnected: %s (total: %d)", c.id, s.clientCount())
+
+				// Notify the peer that their session partner has disconnected.
+				if peerID != "" {
+					s.notifyPeerDisconnected(peerID, c.id)
+				}
+
+				s.broadcastUserList()
+			} else {
+				s.mu.Unlock()
 			}
-			peerID := c.peerID
-			s.mu.Unlock()
-
-			log.Printf("[relay] client disconnected: %s (total: %d)", c.id, s.clientCount())
-
-			// Notify the peer that their session partner has disconnected.
-			if peerID != "" {
-				s.notifyPeerDisconnected(peerID, c.id)
-			}
-
-			s.broadcastUserList()
 		}
 	}
 }
@@ -474,6 +482,18 @@ func (c *client) readPump() {
 	}
 }
 
+func isValidShortID(id string) bool {
+	if len(id) != shortIDLength {
+		return false
+	}
+	for _, char := range id {
+		if !strings.ContainsRune(shortIDChars, char) {
+			return false
+		}
+	}
+	return true
+}
+
 // serveWS upgrades an HTTP request to a WebSocket connection and registers
 // the new client with the relay server.
 func serveWS(s *relayServer, w http.ResponseWriter, r *http.Request) {
@@ -483,13 +503,19 @@ func serveWS(s *relayServer, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := s.generateUniqueID()
-	if err != nil {
-		log.Printf("[relay] failed to generate client ID: %v", err)
-		conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "ID allocation failed"))
-		conn.Close()
-		return
+	requestedID := r.URL.Query().Get("id")
+	var id string
+	if requestedID != "" && isValidShortID(requestedID) {
+		id = requestedID
+	} else {
+		id, err = s.generateUniqueID()
+		if err != nil {
+			log.Printf("[relay] failed to generate client ID: %v", err)
+			conn.WriteMessage(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "ID allocation failed"))
+			conn.Close()
+			return
+		}
 	}
 
 	c := &client{

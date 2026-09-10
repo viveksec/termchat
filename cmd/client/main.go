@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -117,6 +118,7 @@ type wsClient struct {
 	sc         *sessionCrypto
 	done       chan struct{}
 	reconnect  bool
+	clientID   string
 }
 
 // newWSClient creates a wsClient with multi-server fallback support.
@@ -142,12 +144,21 @@ func (wc *wsClient) connect() error {
 		default:
 		}
 
+		dialURL := url
+		if wc.clientID != "" {
+			if strings.Contains(dialURL, "?") {
+				dialURL += "&id=" + wc.clientID
+			} else {
+				dialURL += "?id=" + wc.clientID
+			}
+		}
+
 		dialer := websocket.Dialer{
 			HandshakeTimeout: 10 * time.Second,
 		}
 		header := http.Header{}
 		header.Add("Bypass-Tunnel-Reminder", "true")
-		conn, _, err := dialer.Dial(url, header)
+		conn, _, err := dialer.Dial(dialURL, header)
 		if err == nil {
 			wc.connMu.Lock()
 			wc.conn = conn
@@ -274,6 +285,9 @@ func (wc *wsClient) handleIncomingPacket(pkt *protocol.Packet) {
 		if err := pkt.DecodePayload(&payload); err != nil {
 			log.Printf("[client] invalid HELLO payload: %v", err)
 			return
+		}
+		if wc.clientID == "" {
+			wc.clientID = payload.AssignedID
 		}
 		wc.program.Send(wsConnectedMsg{assignedID: payload.AssignedID})
 
