@@ -26,12 +26,16 @@ import (
 )
 
 const (
-	serverVersion = "1.0.0"
+	serverVersion = "1.0.1"
 
 	// WebSocket tunables.
+	// pongWait is intentionally short (45s) so we detect dead connections well
+	// before cloud proxies (e.g. Cloudflare) silently drop the TCP stream at ~60s.
+	// pingPeriod is 30s — well inside the proxy timeout — giving the client
+	// ample time to respond before we declare the connection stale.
 	writeWait      = 10 * time.Second
-	pongWait       = 60 * time.Second
-	pingPeriod     = (pongWait * 9) / 10
+	pongWait       = 45 * time.Second
+	pingPeriod     = 30 * time.Second
 	maxMessageSize = 64 * 1024 // 64 KiB — more than enough for encrypted messages
 
 	// Short ID character set: unambiguous alphanumeric characters only.
@@ -496,6 +500,11 @@ func isValidShortID(id string) bool {
 
 // serveWS upgrades an HTTP request to a WebSocket connection and registers
 // the new client with the relay server.
+//
+// Session resumption: the client may pass its previously-assigned ID via
+// either the "id" or "client_id" URL query parameter. If the ID is valid and
+// already registered, the new connection is bound to that existing session
+// (preserving any in-progress peer association) instead of minting a fresh ID.
 func serveWS(s *relayServer, w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -503,10 +512,19 @@ func serveWS(s *relayServer, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Accept the client-provided ID from either query param name.
 	requestedID := r.URL.Query().Get("id")
+	if requestedID == "" {
+		requestedID = r.URL.Query().Get("client_id")
+	}
+
 	var id string
+	var isResume bool
 	if requestedID != "" && isValidShortID(requestedID) {
 		id = requestedID
+		s.mu.RLock()
+		_, isResume = s.clients[id]
+		s.mu.RUnlock()
 	} else {
 		id, err = s.generateUniqueID()
 		if err != nil {
@@ -516,6 +534,12 @@ func serveWS(s *relayServer, w http.ResponseWriter, r *http.Request) {
 			conn.Close()
 			return
 		}
+	}
+
+	if isResume {
+		log.Printf("[relay] session resumed for client %s", id)
+	} else {
+		log.Printf("[relay] new session created for client %s", id)
 	}
 
 	c := &client{

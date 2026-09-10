@@ -265,17 +265,57 @@ func (wc *wsClient) readLoop() {
 }
 
 // readMessages reads packets from the open connection until it closes.
+// A per-connection keepalive ticker sends an application-level MsgPing every
+// 25 seconds to prevent cloud-proxy idle timeouts (which typically fire at ~60s).
 func (wc *wsClient) readMessages() {
 	wc.connMu.RLock()
 	conn := wc.conn
 	wc.connMu.RUnlock()
 
+	// Client read deadline: 50s, well within the server's 45s pongWait +
+	// 10s write-wait window, and short enough to detect dead connections fast.
+	const clientReadDeadline = 50 * time.Second
+	const keepAlivePeriod = 25 * time.Second
+
 	conn.SetReadLimit(128 * 1024)
-	conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(clientReadDeadline))
+
+	// Reset read deadline each time the server sends a WebSocket-level ping.
 	conn.SetPingHandler(func(appData string) error {
-		conn.SetReadDeadline(time.Now().Add(70 * time.Second))
+		conn.SetReadDeadline(time.Now().Add(clientReadDeadline))
 		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(10*time.Second))
 	})
+
+	// keepAlive sends an application-level MsgPing every 25s so the underlying
+	// TCP stream stays alive through Cloudflare and other idle-timeout proxies.
+	stopKeepAlive := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(keepAlivePeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				pkt, err := protocol.NewPacket(protocol.MsgPing, "", nil)
+				if err != nil {
+					continue
+				}
+				data, err := pkt.Encode()
+				if err != nil {
+					continue
+				}
+				if err := wc.writeRaw(data); err != nil {
+					log.Printf("[client] keepalive ping failed: %v", err)
+					return
+				}
+				log.Printf("[client] keepalive ping sent")
+			case <-stopKeepAlive:
+				return
+			case <-wc.done:
+				return
+			}
+		}
+	}()
+	defer close(stopKeepAlive)
 
 	for {
 		_, raw, err := conn.ReadMessage()
@@ -286,6 +326,9 @@ func (wc *wsClient) readMessages() {
 			}
 			return
 		}
+
+		// Any traffic resets the read deadline — the connection is alive.
+		conn.SetReadDeadline(time.Now().Add(clientReadDeadline))
 
 		pkt, err := protocol.DecodePacket(raw)
 		if err != nil {
