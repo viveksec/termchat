@@ -11,11 +11,13 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -76,6 +78,25 @@ func (sc *sessionCrypto) clearSharedSecret() {
 	sc.sharedSecret = nil
 }
 
+const (
+	shortIDChars  = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	shortIDLength = 6
+)
+
+// generateShortID creates a cryptographically random, human-friendly short ID.
+func generateShortID() string {
+	id := make([]byte, shortIDLength)
+	charCount := big.NewInt(int64(len(shortIDChars)))
+	for i := range id {
+		n, err := rand.Int(rand.Reader, charCount)
+		if err != nil {
+			log.Fatalf("[client] failed to generate random ID: %v", err)
+		}
+		id[i] = shortIDChars[n.Int64()]
+	}
+	return string(id)
+}
+
 // ─────────────────────────────────────────────────────────────
 // WebSocket client
 // ─────────────────────────────────────────────────────────────
@@ -122,7 +143,7 @@ type wsClient struct {
 }
 
 // newWSClient creates a wsClient with multi-server fallback support.
-func newWSClient(serverURL string, customURL bool, sc *sessionCrypto) *wsClient {
+func newWSClient(serverURL string, customURL bool, sc *sessionCrypto, clientID string) *wsClient {
 	return &wsClient{
 		serverURL:  serverURL,
 		serverList: buildServerList(serverURL, customURL),
@@ -131,6 +152,7 @@ func newWSClient(serverURL string, customURL bool, sc *sessionCrypto) *wsClient 
 		sc:         sc,
 		done:       make(chan struct{}),
 		reconnect:  true,
+		clientID:   clientID,
 	}
 }
 
@@ -286,9 +308,8 @@ func (wc *wsClient) handleIncomingPacket(pkt *protocol.Packet) {
 			log.Printf("[client] invalid HELLO payload: %v", err)
 			return
 		}
-		if wc.clientID == "" {
-			wc.clientID = payload.AssignedID
-		}
+		// The assigned ID is guaranteed to match our requested clientID because
+		// we pass it on the URL string. We don't overwrite wc.clientID anymore.
 		wc.program.Send(wsConnectedMsg{assignedID: payload.AssignedID})
 
 	case protocol.MsgUserList:
@@ -738,11 +759,15 @@ func main() {
 	sc := newSessionCrypto()
 	log.Printf("[client] generated X25519 public key: %s", sc.keyPair.PublicKeyBase64())
 
+	// Generate static session ID for the entire lifecycle of the app.
+	clientID := generateShortID()
+	log.Printf("[client] generated static session ID: %s", clientID)
+
 	// Create the WebSocket client.
-	wc := newWSClient(*serverURL, customURL, sc)
+	wc := newWSClient(*serverURL, customURL, sc, clientID)
 
 	// Create the initial Bubbletea model, wired to the WebSocket send channel.
-	innerModel := initialModel(wc.sendCh)
+	innerModel := initialModel(wc.sendCh, clientID)
 
 	// Wrap the model so the update loop can handle crypto and send operations.
 	wrapped := &wrappedProgram{

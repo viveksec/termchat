@@ -329,7 +329,7 @@ type outgoingMsg struct {
 }
 
 // initialModel creates a zeroed model with an initialised text input.
-func initialModel(sendCh chan<- outgoingMsg) model {
+func initialModel(sendCh chan<- outgoingMsg, clientID string) model {
 	ti := textinput.New()
 	ti.Placeholder = "Type /help for commands, or a message…"
 	ti.Focus()
@@ -343,6 +343,7 @@ func initialModel(sendCh chan<- outgoingMsg) model {
 		input:    ti,
 		sendCh:   sendCh,
 		messages: []chatMessage{},
+		myID:     clientID,
 	}
 }
 
